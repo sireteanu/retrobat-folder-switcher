@@ -32,6 +32,9 @@ namespace RetroBatFolderSwitcher
                 return 0;
             }
 
+            if (Has("--build-libraries") || Has("--rebuild-libraries"))
+                return BuildLibrariesOnly(rebuild: Has("--rebuild-libraries"), dryRun: Has("--dry-run"));
+
             return RunHeadless(dryRun: Has("--dry-run"), noLaunch: Has("--dry-run") || Has("--no-launch"));
         }
 
@@ -55,11 +58,34 @@ namespace RetroBatFolderSwitcher
                 return 0;
             }
 
+            if (cfg.BuildLibrariesOnLaunch)
+            {
+                try { new LibraryBuilder(Log).BuildAll(cfg, rebuild: false, dryRun: dryRun); }
+                catch (Exception ex) { Log("ERROR building libraries: " + ex.Message); }
+            }
+
             try { sw.Apply(cfg, rbDir, dryRun); }
             catch (Exception ex) { Log("ERROR switching folder: " + ex.Message); }
 
             if (!noLaunch) sw.Launch(rbDir, cfg);
             return 0;
+        }
+
+        private static int BuildLibrariesOnly(bool rebuild, bool dryRun)
+        {
+            TrimLog();
+            Log("---- " + (rebuild ? "rebuild" : "build") + " libraries " + (dryRun ? "(dry run) " : "") + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            Config cfg;
+            try { cfg = ConfigStore.Load(ConfigPath, Log); }
+            catch (Exception ex) { Log("Config error: " + ex.Message); return 1; }
+            if (rebuild && !dryRun && Switcher.IsRetroBatRunning())
+            {
+                Log("RetroBat is running - close it before rebuilding libraries.");
+                return 1;
+            }
+            var b = new LibraryBuilder(Log);
+            b.BuildAll(cfg, rebuild, dryRun);
+            return b.Failed > 0 ? 2 : 0;
         }
 
         public static void Log(string msg)

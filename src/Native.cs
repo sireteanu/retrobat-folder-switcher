@@ -91,22 +91,57 @@ namespace RetroBatFolderSwitcher
 
     internal static class Junction
     {
+        /// <summary>Creates a directory junction natively (no admin, no cmd window). Local targets only.</summary>
         public static void Create(string link, string target)
         {
-            var psi = new ProcessStartInfo("cmd.exe", "/c mklink /J \"" + link + "\" \"" + target + "\"")
+            string full = Path.GetFullPath(target);
+            if (full.Length > 3) full = full.TrimEnd('\\');
+            string subst = @"\??\" + full;
+            byte[] substBytes = Encoding.Unicode.GetBytes(subst);
+            byte[] printBytes = Encoding.Unicode.GetBytes(full);
+
+            // REPARSE_DATA_BUFFER (MountPointReparseBuffer)
+            int pathBufLen = substBytes.Length + 2 + printBytes.Length + 2;
+            int dataLen = 8 + pathBufLen;
+            var buf = new byte[8 + dataLen];
+            BitConverter.GetBytes(0xA0000003u).CopyTo(buf, 0);                      // IO_REPARSE_TAG_MOUNT_POINT
+            BitConverter.GetBytes((ushort)dataLen).CopyTo(buf, 4);
+            BitConverter.GetBytes((ushort)0).CopyTo(buf, 8);                          // SubstituteNameOffset
+            BitConverter.GetBytes((ushort)substBytes.Length).CopyTo(buf, 10);         // SubstituteNameLength
+            BitConverter.GetBytes((ushort)(substBytes.Length + 2)).CopyTo(buf, 12);   // PrintNameOffset
+            BitConverter.GetBytes((ushort)printBytes.Length).CopyTo(buf, 14);         // PrintNameLength
+            substBytes.CopyTo(buf, 16);
+            printBytes.CopyTo(buf, 16 + substBytes.Length + 2);
+
+            Directory.CreateDirectory(link);
+            const uint GENERIC_WRITE = 0x40000000;
+            const uint OPEN_EXISTING = 3;
+            const uint FLAGS = 0x02000000 /*BACKUP_SEMANTICS*/ | 0x00200000 /*OPEN_REPARSE_POINT*/;
+            const uint FSCTL_SET_REPARSE_POINT = 0x000900A4;
+
+            IntPtr h = CreateFile(link, GENERIC_WRITE, 0, IntPtr.Zero, OPEN_EXISTING, FLAGS, IntPtr.Zero);
+            if (h == new IntPtr(-1))
             {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            using (var p = Process.Start(psi))
+                int e = Marshal.GetLastWin32Error();
+                try { Directory.Delete(link, false); } catch { }
+                throw new IOException("Could not open '" + link + "' (error " + e + ").");
+            }
+            IntPtr mem = Marshal.AllocHGlobal(buf.Length);
+            try
             {
-                string err = p.StandardError.ReadToEnd();
-                p.StandardOutput.ReadToEnd();
-                p.WaitForExit(10000);
-                if (p.ExitCode != 0 || !Directory.Exists(link))
-                    throw new IOException("mklink failed: " + err.Trim());
+                Marshal.Copy(buf, 0, mem, buf.Length);
+                if (!DeviceIoControl(h, FSCTL_SET_REPARSE_POINT, mem, buf.Length, IntPtr.Zero, 0, out _, IntPtr.Zero))
+                {
+                    int e = Marshal.GetLastWin32Error();
+                    CloseHandle(h); h = IntPtr.Zero;
+                    try { Directory.Delete(link, false); } catch { }
+                    throw new IOException("Could not create junction '" + link + "' (error " + e + ").");
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(mem);
+                if (h != IntPtr.Zero) CloseHandle(h);
             }
         }
 
@@ -145,5 +180,72 @@ namespace RetroBatFolderSwitcher
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool DeviceIoControl(IntPtr h, uint code, IntPtr inBuf, int inSize, IntPtr outBuf, int outSize, out int returned, IntPtr overlapped);
         [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr h);
+    }
+
+    // ================= Links (symlink / junction) =================
+
+    internal static class Links
+    {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private static extern bool CreateSymbolicLink(string link, string target, int flags);
+
+        private const int SYMBOLIC_LINK_FLAG_DIRECTORY = 1;
+        private const int SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE = 2;
+
+        /// <summary>Directory symlink. Works without admin when Windows Developer Mode is on.</summary>
+        public static bool TryCreateSymlink(string link, string target, out int error)
+        {
+            bool ok = CreateSymbolicLink(link, target, SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE);
+            error = ok ? 0 : Marshal.GetLastWin32Error();
+            if (!ok && error == 87) // older Windows doesn't know the unprivileged flag
+            {
+                ok = CreateSymbolicLink(link, target, SYMBOLIC_LINK_FLAG_DIRECTORY);
+                error = ok ? 0 : Marshal.GetLastWin32Error();
+            }
+            return ok;
+        }
+
+        public static bool IsNetworkPath(string path)
+        {
+            try
+            {
+                string full = Path.GetFullPath(path);
+                if (full.StartsWith(@"\\")) return true;
+                return new DriveInfo(Path.GetPathRoot(full)).DriveType == DriveType.Network;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>True for symlinks/junctions, including broken ones whose target is offline.</summary>
+        public static bool IsLink(string path)
+        {
+            try { return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0; }
+            catch { return false; }
+        }
+
+        /// <summary>Creates a directory link. linkType: Auto, Symlink or Junction. Returns the kind created.</summary>
+        public static string Create(string link, string target, string linkType)
+        {
+            string type = (linkType ?? "Auto").Trim().ToLowerInvariant();
+            bool network = IsNetworkPath(target);
+
+            if (type == "junction")
+            {
+                if (network) throw new IOException("junctions can't point to network locations - use Symlink or Auto");
+                Junction.Create(link, target);
+                return "junction";
+            }
+
+            if (TryCreateSymlink(link, target, out int err)) return "symlink";
+
+            if (type == "symlink" || network)
+                throw new IOException(err == 1314
+                    ? "symlinks need Developer Mode or Run as administrator" + (network ? " (network source)" : "")
+                    : "symlink failed (error " + err + ")");
+
+            Junction.Create(link, target);
+            return "junction";
+        }
     }
 }

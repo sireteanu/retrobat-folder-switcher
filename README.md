@@ -42,6 +42,29 @@ Open it with `RetroBatFolderSwitcher.exe --settings`, or **hold Shift** while la
 - **Desktop shortcuts** creates `RetroBat (Folder Switcher)` and `RetroBat Folder Switcher Settings` on your desktop.
 - **Save & launch RetroBat** saves, switches the folder and starts RetroBat.
 
+## Libraries (building the roms folders)
+
+The **Libraries** tab builds the folders the rules point at, the same way `create_symlinks_win_multiple.bat` did. Each library is an output folder filled with one link per system folder (`nes`, `snes`, ...) found in its sources.
+
+![Libraries](docs/libraries.png)
+
+- **Sources are checked in order.** If two sources have the same system, the first one wins.
+- Folders starting with the **skip prefix** (default `_`, e.g. `_media`) aren't linked.
+- Anything already in the output folder is left alone, and sources that don't exist (an unplugged drive) are skipped with a warning.
+- **Tag** creates an empty marker file such as `.local` in the output folder.
+- **Build all** adds links for any new systems. **Rebuild all** removes the existing links and recreates them, which you need after changing the source order. Only links are ever removed, never real folders or files.
+- **Add links for new systems every time RetroBat is launched** runs *Build all* before switching.
+- To use a library, pick its output folder (e.g. `D:\roms1\roms_local`) as a rule's folder on the first tab. Full paths work.
+
+**Link types**
+- **Auto** (default): a symlink if Windows allows it, otherwise a junction.
+- **Symlink**: needs **Developer Mode** (Settings → System → For developers) or running as administrator. This is required for network sources such as a mapped `Z:` drive.
+- **Junction**: no admin needed, but only for local drives.
+
+Turning on Developer Mode is the easiest option. It lets symlinks work without "Run as administrator", which matters because an elevated app often can't see your mapped network drives.
+
+Your three groups from the `.bat` are the starting setup.
+
 ## Configuration file
 
 Settings are stored in `FolderSwitcher.json` next to the exe (created on first run):
@@ -58,7 +81,13 @@ Settings are stored in `FolderSwitcher.json` next to the exe (created on first r
   "DockedRuleEnabled": true,
   "DockedDrives": [ "G:\\", "H:\\" ],
   "DockedFolder": "roms-docked",
-  "DefaultFolder": "roms-default"
+  "DefaultFolder": "roms-default",
+  "Libraries": [
+    { "Enabled": true, "Output": "D:\\roms1\\roms_local", "Tag": "local", "Sources": [ "E:\\roms", "D:\\roms" ] }
+  ],
+  "SkipPrefix": "_",
+  "LinkType": "Auto",
+  "BuildLibrariesOnLaunch": false
 }
 ```
 
@@ -68,6 +97,8 @@ Settings are stored in `FolderSwitcher.json` next to the exe (created on first r
 ## Command line
 
 - `--settings`: open the settings window.
+- `--build-libraries`: build all libraries and exit (add `--dry-run` to preview).
+- `--rebuild-libraries`: remove and recreate all library links, then exit.
 - `--dry-run`: log the decision only; change nothing and don't launch.
 - `--no-launch`: switch the folder but don't start RetroBat.
 

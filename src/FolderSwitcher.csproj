@@ -7,7 +7,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>RetroBatFolderSwitcher</AssemblyName>
     <RootNamespace>RetroBatFolderSwitcher</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Product>RetroBat Folder Switcher</Product>
     <Description>Points RetroBat's roms folder at the right library before launching RetroBat.</Description>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>

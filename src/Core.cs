@@ -30,6 +30,52 @@ namespace RetroBatFolderSwitcher
 
         /// <summary>Rule 3: everything else. The original roms folder is moved here on first run.</summary>
         public string DefaultFolder { get; set; } = "roms-default";
+
+        // ---------- Library builder ----------
+
+        /// <summary>Folders that get built out of per-system links to the source folders.</summary>
+        public List<LibraryGroup> Libraries { get; set; } = LibraryGroup.Defaults();
+
+        /// <summary>System folders starting with this are not linked (e.g. _media). Empty = link everything.</summary>
+        public string SkipPrefix { get; set; } = "_";
+
+        /// <summary>Auto (symlink, else junction), Symlink, or Junction.</summary>
+        public string LinkType { get; set; } = "Auto";
+
+        /// <summary>Add links for new system folders every time RetroBat is launched.</summary>
+        public bool BuildLibrariesOnLaunch { get; set; } = false;
+    }
+
+    public class LibraryGroup
+    {
+        public bool Enabled { get; set; } = true;
+        /// <summary>The folder that gets filled with links.</summary>
+        public string Output { get; set; } = "";
+        /// <summary>Creates an empty marker file ".tag" in the output folder. Empty = none.</summary>
+        public string Tag { get; set; } = "";
+        /// <summary>Checked in order: when two sources have the same system folder, the first one wins.</summary>
+        public List<string> Sources { get; set; } = new List<string>();
+
+        public override string ToString()
+        {
+            string name = string.IsNullOrWhiteSpace(Output) ? "(no output folder)" : Output;
+            return (Enabled ? "" : "[off] ") + name + (string.IsNullOrWhiteSpace(Tag) ? "" : "   ." + Tag.TrimStart('.'));
+        }
+
+        public LibraryGroup Clone() => new LibraryGroup
+        {
+            Enabled = Enabled, Output = Output, Tag = Tag, Sources = new List<string>(Sources ?? new List<string>())
+        };
+
+        public static List<LibraryGroup> Defaults() => new List<LibraryGroup>
+        {
+            new LibraryGroup { Output = @"D:\roms1\roms_local",   Tag = "local",
+                               Sources = new List<string> { @"E:\roms", @"D:\roms" } },
+            new LibraryGroup { Output = @"D:\roms1\roms_network", Tag = "network",
+                               Sources = new List<string> { @"Z:\Sync\Platform\RetroBat\NETWORK", @"E:\roms" } },
+            new LibraryGroup { Output = @"D:\roms1\roms_docked",  Tag = "docked",
+                               Sources = new List<string> { @"X:\roms", @"Z:\Sync\Platform\RetroBat\NETWORK", @"E:\roms" } },
+        };
     }
 
     internal static class ConfigStore
@@ -43,29 +89,49 @@ namespace RetroBatFolderSwitcher
                 log?.Invoke("Wrote default config: " + path);
                 return def;
             }
-            return new JavaScriptSerializer().Deserialize<Config>(File.ReadAllText(path)) ?? new Config();
+            var c = new JavaScriptSerializer().Deserialize<Config>(File.ReadAllText(path)) ?? new Config();
+            if (c.Libraries == null) c.Libraries = new List<LibraryGroup>();
+            if (c.DockedDrives == null) c.DockedDrives = new List<string>();
+            return c;
         }
 
         public static void Save(string path, Config c)
         {
-            var js = new JavaScriptSerializer();
-            Func<object, string> v = o => js.Serialize(o);
-            var drives = string.Join(", ", (c.DockedDrives ?? new List<string>()).Select(d => v(d)));
+            File.WriteAllText(path, Pretty(new JavaScriptSerializer().Serialize(c)) + "\r\n", new UTF8Encoding(false));
+        }
+
+        /// <summary>Indents compact JSON. String contents (including escapes) are copied untouched.</summary>
+        internal static string Pretty(string json)
+        {
             var sb = new StringBuilder();
-            sb.Append("{\r\n");
-            sb.Append("  \"RetroBatPath\": ").Append(v(c.RetroBatPath ?? "")).Append(",\r\n");
-            sb.Append("  \"RetroBatExe\": ").Append(v(c.RetroBatExe ?? "")).Append(",\r\n");
-            sb.Append("  \"LaunchArguments\": ").Append(v(c.LaunchArguments ?? "")).Append(",\r\n");
-            sb.Append("  \"LinkName\": ").Append(v(c.LinkName ?? "")).Append(",\r\n");
-            sb.Append("  \"WifiRuleEnabled\": ").Append(v(c.WifiRuleEnabled)).Append(",\r\n");
-            sb.Append("  \"WifiSsidContains\": ").Append(v(c.WifiSsidContains ?? "")).Append(",\r\n");
-            sb.Append("  \"WifiFolder\": ").Append(v(c.WifiFolder ?? "")).Append(",\r\n");
-            sb.Append("  \"DockedRuleEnabled\": ").Append(v(c.DockedRuleEnabled)).Append(",\r\n");
-            sb.Append("  \"DockedDrives\": [ ").Append(drives).Append(" ],\r\n");
-            sb.Append("  \"DockedFolder\": ").Append(v(c.DockedFolder ?? "")).Append(",\r\n");
-            sb.Append("  \"DefaultFolder\": ").Append(v(c.DefaultFolder ?? "")).Append("\r\n");
-            sb.Append("}\r\n");
-            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
+            int indent = 0;
+            bool inStr = false;
+            for (int i = 0; i < json.Length; i++)
+            {
+                char c = json[i];
+                if (inStr)
+                {
+                    sb.Append(c);
+                    if (c == '\\' && i + 1 < json.Length) sb.Append(json[++i]);
+                    else if (c == '"') inStr = false;
+                    continue;
+                }
+                switch (c)
+                {
+                    case '"': inStr = true; sb.Append(c); break;
+                    case '{':
+                    case '[':
+                        // keep empty {} / [] on one line
+                        if (i + 1 < json.Length && (json[i + 1] == '}' || json[i + 1] == ']')) { sb.Append(c).Append(json[++i]); break; }
+                        sb.Append(c).Append("\r\n").Append(' ', ++indent * 2); break;
+                    case '}':
+                    case ']': sb.Append("\r\n").Append(' ', --indent * 2).Append(c); break;
+                    case ',': sb.Append(c).Append("\r\n").Append(' ', indent * 2); break;
+                    case ':': sb.Append(": "); break;
+                    default: sb.Append(c); break;
+                }
+            }
+            return sb.ToString();
         }
     }
 
@@ -184,6 +250,11 @@ namespace RetroBatFolderSwitcher
                     "'" + linkPath + "' is a real folder and '" + defaultPath + "' already exists. " +
                     "Move or merge them yourself, then run again.");
             }
+
+            if (!string.Equals(Path.GetPathRoot(Path.GetFullPath(linkPath)), Path.GetPathRoot(Path.GetFullPath(defaultPath)), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "'" + linkPath + "' is a real folder and the default folder '" + defaultPath + "' is on another drive. " +
+                    "Move your roms folder yourself, then run again.");
 
             _log("First run: moving real folder " + linkPath + " -> " + defaultPath);
             Directory.Move(linkPath, defaultPath);

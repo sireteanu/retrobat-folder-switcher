@@ -3,5 +3,5 @@ obj/
 dist/
 *.zip
 *.log
-RomSwitcher.json
+FolderSwitcher.json
 .vs/

@@ -4,12 +4,12 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-namespace RetroBatRomSwitcher
+namespace RetroBatFolderSwitcher
 {
     internal static class Program
     {
-        public const string ConfigFileName = "RomSwitcher.json";
-        public const string LogFileName = "RomSwitcher.log";
+        public const string ConfigFileName = "FolderSwitcher.json";
+        public const string LogFileName = "FolderSwitcher.log";
 
         public static string ExeDir => AppDomain.CurrentDomain.BaseDirectory;
         public static string ConfigPath => Path.Combine(ExeDir, ConfigFileName);

@@ -5,10 +5,10 @@
     <TargetFramework>net48</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <AssemblyName>RetroBatRomSwitcher</AssemblyName>
-    <RootNamespace>RetroBatRomSwitcher</RootNamespace>
+    <AssemblyName>RetroBatFolderSwitcher</AssemblyName>
+    <RootNamespace>RetroBatFolderSwitcher</RootNamespace>
     <Version>1.1.0</Version>
-    <Product>RetroBat ROM Switcher</Product>
+    <Product>RetroBat Folder Switcher</Product>
     <Description>Points RetroBat's roms folder at the right library before launching RetroBat.</Description>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <Prefer32Bit>false</Prefer32Bit>

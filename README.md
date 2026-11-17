@@ -1,4 +1,4 @@
-# RetroBat ROM Switcher
+# RetroBat Folder Switcher
 
 A tiny Windows launcher that points RetroBat at the right ROM library, then starts RetroBat.
 
@@ -20,17 +20,17 @@ If RetroBat/EmulationStation is already running, the link is left alone and Retr
 
 ## Install
 
-1. Download `RetroBatRomSwitcher.zip` from [Releases](../../releases).
-2. Put `RetroBatRomSwitcher.exe` in your RetroBat folder (next to `retrobat.exe`).
+1. Download `RetroBatFolderSwitcher.zip` from [Releases](../../releases).
+2. Put `RetroBatFolderSwitcher.exe` in your RetroBat folder (next to `retrobat.exe`).
 3. Create the folders you want next to it: `roms-local`, `roms-docked` (they can themselves be junctions to G:/H: or a NAS share).
-4. Run `RetroBatRomSwitcher.exe --settings` (or hold Shift while opening it) to configure, and click **Desktop shortcuts** if you want them.
-5. Launch RetroBat through `RetroBatRomSwitcher.exe` (Steam shortcut, desktop shortcut, Playnite, etc.).
+4. Run `RetroBatFolderSwitcher.exe --settings` (or hold Shift while opening it) to configure, and click **Desktop shortcuts** if you want them.
+5. Launch RetroBat through `RetroBatFolderSwitcher.exe` (Steam shortcut, desktop shortcut, Playnite, etc.).
 
 Requires .NET Framework 4.8, which ships with Windows 10/11.
 
 ## Settings window
 
-Open it with `RetroBatRomSwitcher.exe --settings`, or **hold Shift** while launching the exe.
+Open it with `RetroBatFolderSwitcher.exe --settings`, or **hold Shift** while launching the exe.
 
 ![Settings](docs/settings.png)
 
@@ -39,12 +39,12 @@ Open it with `RetroBatRomSwitcher.exe --settings`, or **hold Shift** while launc
 - **Right now** shows which rule would win on this machine at this moment.
 - **Open** opens (or offers to create) each folder.
 - **Test (dry run)** shows exactly what would happen without changing anything.
-- **Desktop shortcuts** creates `RetroBat (ROM Switcher)` and `RetroBat ROM Switcher Settings` on your desktop.
+- **Desktop shortcuts** creates `RetroBat (Folder Switcher)` and `RetroBat Folder Switcher Settings` on your desktop.
 - **Save & launch RetroBat** saves, switches the folder and starts RetroBat.
 
 ## Configuration file
 
-Settings are stored in `RomSwitcher.json` next to the exe (created on first run):
+Settings are stored in `FolderSwitcher.json` next to the exe (created on first run):
 
 ```json
 {
@@ -71,7 +71,7 @@ Settings are stored in `RomSwitcher.json` next to the exe (created on first run)
 - `--dry-run`: log the decision only; change nothing and don't launch.
 - `--no-launch`: switch the folder but don't start RetroBat.
 
-Everything is logged to `RomSwitcher.log` next to the exe.
+Everything is logged to `FolderSwitcher.log` next to the exe.
 
 ## Notes
 
@@ -81,7 +81,7 @@ Everything is logged to `RomSwitcher.log` next to the exe.
 ## Build
 
 ```
-dotnet build src/RomSwitcher.csproj -c Release
+dotnet build src/FolderSwitcher.csproj -c Release
 ```
 
 Tag a version (`git tag v1.0.0 && git push --tags`) and GitHub Actions publishes a release zip.

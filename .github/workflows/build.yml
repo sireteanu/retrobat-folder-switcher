@@ -21,22 +21,22 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Build
-        run: dotnet build src/RomSwitcher.csproj -c Release -o dist
+        run: dotnet build src/FolderSwitcher.csproj -c Release -o dist
 
       - name: Package
         shell: pwsh
         run: |
           Copy-Item README.md dist/
-          Compress-Archive -Path dist/RetroBatRomSwitcher.exe, dist/README.md -DestinationPath RetroBatRomSwitcher.zip
+          Compress-Archive -Path dist/RetroBatFolderSwitcher.exe, dist/README.md -DestinationPath RetroBatFolderSwitcher.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RetroBatRomSwitcher
-          path: RetroBatRomSwitcher.zip
+          name: RetroBatFolderSwitcher
+          path: RetroBatFolderSwitcher.zip
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: RetroBatRomSwitcher.zip
+          files: RetroBatFolderSwitcher.zip
           generate_release_notes: true

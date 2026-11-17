@@ -7,7 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
 
-namespace RetroBatRomSwitcher
+namespace RetroBatFolderSwitcher
 {
     internal class SettingsForm : Form
     {
@@ -37,7 +37,7 @@ namespace RetroBatRomSwitcher
 
         public SettingsForm()
         {
-            Text = "RetroBat ROM Switcher - Settings";
+            Text = "RetroBat Folder Switcher - Settings";
             Font = new Font("Segoe UI", 9f);
             AutoScaleMode = AutoScaleMode.Dpi;
             StartPosition = FormStartPosition.CenterScreen;
@@ -295,9 +295,9 @@ namespace RetroBatRomSwitcher
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 string rbExe = Path.Combine(RbDir(FromUi()), FromUi().RetroBatExe);
                 string icon = File.Exists(rbExe) ? rbExe : exe;
-                MakeShortcut(Path.Combine(desktop, "RetroBat (ROM Switcher).lnk"), exe, "", icon, "Pick ROM folder, then start RetroBat");
-                MakeShortcut(Path.Combine(desktop, "RetroBat ROM Switcher Settings.lnk"), exe, "--settings", exe, "RetroBat ROM Switcher settings");
-                Out("Created desktop shortcuts: 'RetroBat (ROM Switcher)' and 'RetroBat ROM Switcher Settings'.");
+                MakeShortcut(Path.Combine(desktop, "RetroBat (Folder Switcher).lnk"), exe, "", icon, "Pick ROM folder, then start RetroBat");
+                MakeShortcut(Path.Combine(desktop, "RetroBat Folder Switcher Settings.lnk"), exe, "--settings", exe, "RetroBat Folder Switcher settings");
+                Out("Created desktop shortcuts: 'RetroBat (Folder Switcher)' and 'RetroBat Folder Switcher Settings'.");
             }
             catch (Exception ex) { Out("Could not create shortcuts: " + ex.Message); }
         }

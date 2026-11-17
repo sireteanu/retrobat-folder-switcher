@@ -84,4 +84,4 @@ Everything is logged to `FolderSwitcher.log` next to the exe.
 dotnet build src/FolderSwitcher.csproj -c Release
 ```
 
-Tag a version (`git tag v1.0.0 && git push --tags`) and GitHub Actions publishes a release zip.
+Every push to `main` builds the exe on GitHub Actions. Bump `<Version>` in `src/FolderSwitcher.csproj` and push to publish a new release zip.

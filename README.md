@@ -23,13 +23,28 @@ If RetroBat/EmulationStation is already running, the link is left alone and Retr
 1. Download `RetroBatRomSwitcher.zip` from [Releases](../../releases).
 2. Put `RetroBatRomSwitcher.exe` in your RetroBat folder (next to `retrobat.exe`).
 3. Create the folders you want next to it: `roms-local`, `roms-docked` (they can themselves be junctions to G:/H: or a NAS share).
-4. Launch RetroBat through `RetroBatRomSwitcher.exe` (Steam shortcut, desktop shortcut, Playnite, etc.).
+4. Run `RetroBatRomSwitcher.exe --settings` (or hold Shift while opening it) to configure, and click **Desktop shortcuts** if you want them.
+5. Launch RetroBat through `RetroBatRomSwitcher.exe` (Steam shortcut, desktop shortcut, Playnite, etc.).
 
 Requires .NET Framework 4.8, which ships with Windows 10/11.
 
-## Configuration
+## Settings window
 
-`RomSwitcher.json` is created next to the exe on first run:
+Open it with `RetroBatRomSwitcher.exe --settings`, or **hold Shift** while launching the exe.
+
+![Settings](docs/settings.png)
+
+- Turn each rule on/off, set the Wi-Fi text, drives and folder for each rule.
+- **Use current** fills in the Wi-Fi you're connected to; **Check** shows which drives are present.
+- **Right now** shows which rule would win on this machine at this moment.
+- **Open** opens (or offers to create) each folder.
+- **Test (dry run)** shows exactly what would happen without changing anything.
+- **Desktop shortcuts** creates `RetroBat (ROM Switcher)` and `RetroBat ROM Switcher Settings` on your desktop.
+- **Save & launch RetroBat** saves, switches the folder and starts RetroBat.
+
+## Configuration file
+
+Settings are stored in `RomSwitcher.json` next to the exe (created on first run):
 
 ```json
 {
@@ -37,8 +52,10 @@ Requires .NET Framework 4.8, which ships with Windows 10/11.
   "RetroBatExe": "retrobat.exe",
   "LaunchArguments": "",
   "LinkName": "roms",
+  "WifiRuleEnabled": true,
   "WifiSsidContains": "sireteanu",
   "WifiFolder": "roms-local",
+  "DockedRuleEnabled": true,
   "DockedDrives": [ "G:\\", "H:\\" ],
   "DockedFolder": "roms-docked",
   "DefaultFolder": "roms-default"
@@ -46,10 +63,11 @@ Requires .NET Framework 4.8, which ships with Windows 10/11.
 ```
 
 - `RetroBatPath`: leave empty if the exe sits in the RetroBat folder; otherwise e.g. `"D:\\RetroBat"`.
-- Set `WifiSsidContains` to `""` or `DockedDrives` to `[]` to disable a rule.
+- Set `WifiRuleEnabled` / `DockedRuleEnabled` to `false` to disable a rule.
 
 ## Command line
 
+- `--settings`: open the settings window.
 - `--dry-run`: log the decision only; change nothing and don't launch.
 - `--no-launch`: switch the folder but don't start RetroBat.
 

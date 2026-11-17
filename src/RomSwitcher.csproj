@@ -7,7 +7,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>RetroBatRomSwitcher</AssemblyName>
     <RootNamespace>RetroBatRomSwitcher</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>RetroBat ROM Switcher</Product>
     <Description>Points RetroBat's roms folder at the right library before launching RetroBat.</Description>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
   </ItemGroup>
 
 </Project>

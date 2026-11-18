@@ -50,11 +50,20 @@ namespace RetroBatFolderSwitcher
         /// <summary>Adds &lt;rom folder&gt;\&lt;system&gt;\media links pointing at &lt;MediaFolder&gt;\&lt;system&gt;\media.</summary>
         public bool MediaLinksEnabled { get; set; } = true;
         /// <summary>Holds one folder per system, each containing a "media" folder (copy of MEDIA_FULL).</summary>
-        public string MediaFolder { get; set; } = @"C:\RetroBat\Media";
+        public string MediaFolder { get; set; } = @"C:\Games\RetroBat\media";
         /// <summary>Rom folders whose system folders get a media link (e.g. the robocopy /XD media destination).</summary>
-        public List<string> MediaRomFolders { get; set; } = new List<string> { @"E:\Roms" };
+        public List<string> MediaRomFolders { get; set; } = new List<string> { @"E:\Roms", @"C:\Games\Roms" };
         /// <summary>Name of the link inside each system folder, and of the folder it points to.</summary>
         public string MediaLinkName { get; set; } = "media";
+
+        // ---------- Robocopy sync ----------
+
+        /// <summary>robocopy IN OUT /MIR /XD media - run individually from the Sync tab.</summary>
+        public List<SyncJob> RomSyncs { get; set; } = SyncJob.DefaultRomSyncs();
+        /// <summary>robocopy IN OUT /MIR /XD &lt;excluded folders&gt;</summary>
+        public List<SyncJob> MediaSyncs { get; set; } = SyncJob.DefaultMediaSyncs();
+        /// <summary>Extra robocopy switches added to every sync.</summary>
+        public string RobocopyOptions { get; set; } = "/R:2 /W:5 /NP";
     }
 
     public class LibraryGroup
@@ -102,6 +111,8 @@ namespace RetroBatFolderSwitcher
             if (c.Libraries == null) c.Libraries = new List<LibraryGroup>();
             if (c.DockedDrives == null) c.DockedDrives = new List<string>();
             if (c.MediaRomFolders == null) c.MediaRomFolders = new List<string>();
+            if (c.RomSyncs == null) c.RomSyncs = new List<SyncJob>();
+            if (c.MediaSyncs == null) c.MediaSyncs = new List<SyncJob>();
             return c;
         }
 
@@ -302,13 +313,15 @@ namespace RetroBatFolderSwitcher
 
         public static bool IsRetroBatRunning()
         {
-            string[] names = { "emulationstation", "retrobat" };
             int self = Process.GetCurrentProcess().Id;
-            return Process.GetProcesses().Any(p =>
+            foreach (var name in new[] { "emulationstation", "retrobat" })
             {
-                try { return p.Id != self && names.Contains(p.ProcessName.ToLowerInvariant()); }
-                catch { return false; }
-            });
+                var procs = Process.GetProcessesByName(name);
+                bool found = procs.Any(p => p.Id != self);
+                foreach (var p in procs) p.Dispose();
+                if (found) return true;
+            }
+            return false;
         }
 
         public bool Launch(string rbDir, Config cfg)

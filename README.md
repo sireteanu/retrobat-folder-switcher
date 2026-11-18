@@ -1,136 +1,105 @@
 # RetroBat Folder Switcher
 
-A tiny Windows launcher that points RetroBat at the right ROM library, then starts RetroBat.
+A small Windows tool for RetroBat that:
 
-| Priority | Condition | Folder used |
-|---|---|---|
-| 1 | Connected Wi-Fi name contains `sireteanu` | `roms-local` |
-| 2 | Drives `G:\` **and** `H:\` are both present | `roms-docked` |
-| 3 | Anything else | `roms-default` (your original `roms`) |
+1. **Switches the roms folder** on launch: by Wi-Fi network, by which drives are plugged in, or a default.
+2. **Builds library folders** made of links to system folders spread across several drives.
+3. **Adds media links** to rom folders that were copied without their `media` folders.
+4. **Runs robocopy syncs** one job at a time, with a preview and the full output in the log.
 
-## How it works
-
-RetroBat always reads `RetroBat\roms`. Instead of editing `es_systems.cfg` (RetroBat overwrites it on updates), the switcher turns `roms` into a **directory junction** and re-points it on every launch. Junctions are transparent to RetroBat and the emulators, and creating them does **not** require admin rights.
-
-**First run:** if `roms` is still a real folder, it is renamed to `roms-default` and `roms` becomes the junction. Nothing is ever deleted or merged. If `roms-default` already exists, the switcher stops and tells you in the log.
-
-If the chosen folder doesn't exist (e.g. no `roms-docked` yet), it falls back to `roms-default`.
-
-If RetroBat/EmulationStation is already running, the link is left alone and RetroBat is just launched.
+Everything is set up in one settings window. Launching RetroBat through the exe is silent.
 
 ## Install
 
-1. Download `RetroBatFolderSwitcher.zip` from [Releases](../../releases).
-2. Put `RetroBatFolderSwitcher.exe` in your RetroBat folder (next to `retrobat.exe`).
-3. Create the folders you want next to it: `roms-local`, `roms-docked` (they can themselves be junctions to G:/H: or a NAS share).
-4. Run `RetroBatFolderSwitcher.exe --settings` (or hold Shift while opening it) to configure, and click **Desktop shortcuts** if you want them.
-5. Launch RetroBat through `RetroBatFolderSwitcher.exe` (Steam shortcut, desktop shortcut, Playnite, etc.).
+1. Download `RetroBatFolderSwitcher.zip` from [Releases](../../releases) and put `RetroBatFolderSwitcher.exe` next to `retrobat.exe`.
+2. Hold **Shift** while opening it (or run `RetroBatFolderSwitcher.exe --settings`) to open settings.
+3. Click **Desktop shortcuts** if you want a "RetroBat (Folder Switcher)" launcher and a settings shortcut.
+4. Launch RetroBat through `RetroBatFolderSwitcher.exe` from Steam, a desktop shortcut, Playnite and so on.
 
-Requires .NET Framework 4.8, which ships with Windows 10/11.
+It needs .NET Framework 4.8, which ships with Windows 10 and 11.
 
-## Settings window
+**Tip:** turn on **Developer Mode** (Settings → System → For developers). It lets the tool create symlinks without "Run as administrator", which matters for network drives. Links between local drives work either way.
 
-Open it with `RetroBatFolderSwitcher.exe --settings`, or **hold Shift** while launching the exe.
+## Folder switching
 
-![Settings](docs/settings.png)
+![Folder switching](docs/settings.png)
 
-- Turn each rule on/off, set the Wi-Fi text, drives and folder for each rule.
-- **Use current** fills in the Wi-Fi you're connected to; **Check** shows which drives are present.
-- **Right now** shows which rule would win on this machine at this moment.
-- **Open** opens (or offers to create) each folder.
-- **Test (dry run)** shows exactly what would happen without changing anything.
-- **Desktop shortcuts** creates `RetroBat (Folder Switcher)` and `RetroBat Folder Switcher Settings` on your desktop.
-- **Save & launch RetroBat** saves, switches the folder and starts RetroBat.
+| Priority | Condition | Folder used |
+|---|---|---|
+| 1 | Connected Wi-Fi name contains the text you set | Wi-Fi folder |
+| 2 | All the listed drives are present | Docked folder |
+| 3 | Anything else | Default folder (your original `roms`) |
 
-## Libraries (building the roms folders)
+RetroBat always reads `RetroBat\roms`. The tool turns `roms` into a **link** and points it at the chosen folder each launch, so `es_systems.cfg` (which RetroBat overwrites on updates) is never edited. A rule's folder can be a name inside the RetroBat folder or a full path, such as a library below.
 
-The **Libraries** tab builds the folders the rules point at, the same way `create_symlinks_win_multiple.bat` did. Each library is an output folder filled with one link per system folder (`nes`, `snes`, ...) found in its sources.
+- **First run:** if `roms` is a real folder, it's renamed to the default folder (`roms-default`). Nothing is ever deleted or merged.
+- If a rule's folder doesn't exist, it falls back to the default. If RetroBat is already running, the link is left alone.
+- **Right now** shows which rule would win at this moment, and **Test (dry run)** shows exactly what would happen.
+- Wi-Fi detection reads the Wi-Fi adapter directly, so a VPN such as WireGuard doesn't affect it. On **Windows 11 24H2+**, apps only see the Wi-Fi name when Location is on (Settings → Privacy & security → Location → *Let desktop apps access your location*).
+
+## Libraries
 
 ![Libraries](docs/libraries.png)
 
+Each library is an output folder filled with one link per system folder (`nes`, `snes`, ...) found in its sources:
+
 - **Sources are checked in order.** If two sources have the same system, the first one wins.
 - Folders starting with the **skip prefix** (default `_`, e.g. `_media`) aren't linked.
-- Anything already in the output folder is left alone, and sources that don't exist (an unplugged drive) are skipped with a warning.
-- **Build all** adds links for any new systems. **Rebuild all** removes the existing links and recreates them, which you need after changing the source order. Only links are ever removed, never real folders or files.
-- **Add links for new systems every time RetroBat is launched** runs *Build all* before switching.
-- To use a library, pick its output folder (e.g. `D:\roms1\roms_local`) as a rule's folder on the first tab. Full paths work.
-
-**Link types**
-- **Auto** (default): a symlink if Windows allows it, otherwise a junction.
-- **Symlink**: needs **Developer Mode** (Settings → System → For developers) or running as administrator. This is required for network sources such as a mapped `Z:` drive.
-- **Junction**: no admin needed, but only for local drives.
-
-Turning on Developer Mode is the easiest option. It lets symlinks work without "Run as administrator", which matters because an elevated app often can't see your mapped network drives.
-
-Your three groups from the `.bat` are the starting setup.
+- Anything already in the output folder is left alone, and missing sources (an unplugged drive) are skipped with a warning.
+- **Build all** adds links for new systems. **Rebuild all** removes and recreates the links, which you need after changing the source order. Only links are ever removed.
+- **Link type:** *Auto* makes a symlink if Windows allows it, otherwise a junction. *Symlink* needs Developer Mode or admin, and is required for network sources. *Junction* needs no admin but only works for local drives.
+- **Update library and media links every time RetroBat is launched** runs *Build all* and the media links before switching.
 
 ## Media links
 
-If your rom folder is copied without its media (for example `robocopy X:\sets\mapping\retrobat\SDCARD E:\Roms /MIR /XD media`) and the media lives somewhere else (for example `MEDIA_FULL` copied to `C:\RetroBat\Media`), the **Media links** tab puts it back with links:
-
-```
-E:\Roms\nes\media   ->   C:\RetroBat\Media\nes\media
-E:\Roms\snes\media  ->   C:\RetroBat\Media\snes\media
-...
-```
-
 ![Media links](docs/media.png)
+
+For rom folders copied without media (`robocopy ... /XD media`), this puts the media back with links:
+
+```
+E:\Roms\nes\media  ->  C:\Games\RetroBat\media\nes\media
+```
 
 - Every system folder in each **rom folder** gets a `media` link, when `<media folder>\<system>\media` exists.
 - Systems without media are skipped, and an existing real `media` folder is never touched.
-- `robocopy /MIR /XD media` leaves the links alone, because excluded folders are never purged. You can re-run the robocopy any time.
-- **Create media links** adds missing ones. **Recreate media links** removes and recreates the links, never real folders.
-- When *Update library and media links every time RetroBat is launched* is on (Libraries tab), media links are updated on launch too.
-- Libraries that link to `E:\Roms\<system>` pick up the media automatically, because they go through the same folder.
-- With `C:` and `E:` both local, these are junctions, so no admin rights or Developer Mode are needed.
+- `robocopy /MIR /XD media` never removes these links, so you can re-sync any time.
+- Libraries that link to these rom folders pick up the media automatically.
 
-## Configuration file
+## Sync (robocopy)
 
-Settings are stored in `FolderSwitcher.json` next to the exe (created on first run):
+![Sync](docs/sync.png)
 
-```json
-{
-  "RetroBatPath": "",
-  "RetroBatExe": "retrobat.exe",
-  "LaunchArguments": "",
-  "LinkName": "roms",
-  "WifiRuleEnabled": true,
-  "WifiSsidContains": "sireteanu",
-  "WifiFolder": "roms-local",
-  "DockedRuleEnabled": true,
-  "DockedDrives": [ "G:\\", "H:\\" ],
-  "DockedFolder": "roms-docked",
-  "DefaultFolder": "roms-default",
-  "Libraries": [
-    { "Enabled": true, "Output": "D:\\roms1\\roms_local", "Sources": [ "E:\\roms", "D:\\roms" ] }
-  ],
-  "SkipPrefix": "_",
-  "LinkType": "Auto",
-  "BuildLibrariesOnLaunch": false,
-  "MediaLinksEnabled": true,
-  "MediaFolder": "C:\\RetroBat\\Media",
-  "MediaRomFolders": [ "E:\\Roms" ],
-  "MediaLinkName": "media"
-}
-```
+Two lists of mirror jobs. Select one or more jobs and run only those, so a full sync never happens unless you ask for it.
 
-- `RetroBatPath`: leave empty if the exe sits in the RetroBat folder; otherwise e.g. `"D:\\RetroBat"`.
-- Set `WifiRuleEnabled` / `DockedRuleEnabled` to `false` to disable a rule.
+| List | Command | You set |
+|---|---|---|
+| Rom sync | `robocopy IN OUT /MIR /XD media` | input folder, output folder |
+| Media sync | `robocopy IN OUT /MIR /XD <excluded>` | input folder, output folder, excluded folders |
+
+- **Preview selected** runs robocopy with `/L`, which lists what would be copied and deleted without changing anything.
+- **Run selected** and **Run all** ask for confirmation first and show the exact commands.
+- Robocopy's full output streams into the log window and `FolderSwitcher.log`. Each job ends with its exit code and what it means.
+- **Stop** cancels the running job, and any remaining jobs are skipped.
+- **Extra robocopy options** (default `/R:2 /W:5 /NP`) are added to every job. Robocopy's default retry setting can wait for days on a single locked file.
+- Excluded folders are separated by spaces or commas. Put quotes around names that contain spaces: `"my folder"`.
+- **Safety checks:** a job won't run if the input is missing or empty (mirroring an empty folder would wipe the output), if the output is a whole drive or a system folder, or if the input and output overlap.
+
+## Settings file
+
+Everything is saved in `FolderSwitcher.json` next to the exe. Unknown or missing keys fall back to defaults, so older files keep working.
 
 ## Command line
 
-- `--settings`: open the settings window.
-- `--build-libraries`: build all libraries and media links, then exit (add `--dry-run` to preview).
-- `--rebuild-libraries`: remove and recreate all library and media links, then exit.
-- `--dry-run`: log the decision only; change nothing and don't launch.
-- `--no-launch`: switch the folder but don't start RetroBat.
+| Option | Does |
+|---|---|
+| *(none)* | Update links if that option is on, switch the folder, launch RetroBat |
+| `--settings` | Open the settings window (same as holding Shift) |
+| `--dry-run` | Log what would happen, change nothing, don't launch |
+| `--no-launch` | Switch the folder but don't start RetroBat |
+| `--build-libraries` | Build libraries and media links, then exit (`--dry-run` to preview) |
+| `--rebuild-libraries` | Remove and recreate library and media links, then exit |
 
-Everything is logged to `FolderSwitcher.log` next to the exe.
-
-## Notes
-
-- **Wi-Fi detection** uses the Windows WLAN API (falls back to `netsh wlan show interfaces`). It reads the physical Wi-Fi adapter, so a VPN like WireGuard doesn't affect it.
-- **Windows 11 24H2+** only gives apps the Wi-Fi name when *Location services* are on and *Let desktop apps access your location* is allowed (Settings → Privacy & security → Location). If the log shows `Connected Wi-Fi: (none detected)` while you're on Wi-Fi, check that setting.
+Everything is logged to `FolderSwitcher.log` next to the exe. In settings, right-click the log for *Copy all*, *Clear* and *Open log file*. **Ctrl+S** saves.
 
 ## Build
 
@@ -138,4 +107,4 @@ Everything is logged to `FolderSwitcher.log` next to the exe.
 dotnet build src/FolderSwitcher.csproj -c Release
 ```
 
-Every push to `main` builds the exe on GitHub Actions. Bump `<Version>` in `src/FolderSwitcher.csproj` and push to publish a new release zip.
+Every push to `main` builds the exe on GitHub Actions. Bump `<Version>` in `src/FolderSwitcher.csproj` and push to publish a new release.

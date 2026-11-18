@@ -94,14 +94,17 @@ namespace RetroBatFolderSwitcher
             try { Console.WriteLine(msg); } catch { }
         }
 
+        internal static void TrimLogPublic() => TrimLog();
+
         private static void TrimLog()
         {
             try
             {
-                if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 256 * 1024)
+                // Robocopy output can be long, so keep a generous tail.
+                if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 8 * 1024 * 1024)
                 {
                     var lines = File.ReadAllLines(LogPath);
-                    File.WriteAllLines(LogPath, lines.Skip(Math.Max(0, lines.Length - 500)));
+                    File.WriteAllLines(LogPath, lines.Skip(Math.Max(0, lines.Length - 20000)));
                 }
             }
             catch { }

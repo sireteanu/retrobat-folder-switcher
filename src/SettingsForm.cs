@@ -9,7 +9,7 @@ using System.Windows.Forms;
 
 namespace RetroBatFolderSwitcher
 {
-    internal class SettingsForm : Form
+    internal partial class SettingsForm : Form
     {
         private readonly TextBox _rbPath = new TextBox();
         private readonly TextBox _exe = new TextBox();
@@ -58,11 +58,14 @@ namespace RetroBatFolderSwitcher
         public SettingsForm()
         {
             Text = "RetroBat Folder Switcher - Settings";
-            Font = new Font("Segoe UI", 9f);
+            SuspendLayout();
+            AutoScaleDimensions = new SizeF(96F, 96F);   // designed at 100%; scaled up on high-DPI screens
             AutoScaleMode = AutoScaleMode.Dpi;
+            Font = new Font("Segoe UI", 9f);
+            KeyPreview = true;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(800, 800);
-            MinimumSize = new Size(680, 640);
+            ClientSize = new Size(820, 860);
+            MinimumSize = new Size(560, 460);
             try { Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location); } catch { }
 
             Padding = new Padding(10);
@@ -94,8 +97,11 @@ namespace RetroBatFolderSwitcher
             buttons.Controls.Add(Btn("Show log", ShowLog));
             buttons.Controls.Add(Btn("Desktop shortcuts", CreateShortcuts));
             buttons.Controls.Add(Btn("Save", () => Save(true)));
-            buttons.Controls.Add(Btn("Save && launch RetroBat", SaveAndLaunch, bold: true));
+            buttons.Controls.Add(Busy(Btn("Save && launch RetroBat", SaveAndLaunch, bold: true)));
             buttons.Controls.Add(Btn("Close", Close));
+            _stopBtn = Btn("Stop", () => { _stopRequested = true; _status.Text = "Stopping..."; });
+            _stopBtn.Enabled = false;
+            buttons.Controls.Add(_stopBtn);
 
             var switchPage = new TabPage("Folder switching") { Padding = new Padding(8), AutoScroll = true };
             switchPage.Controls.Add(rulesGroup);   // Top-docked: added bottom-to-top
@@ -112,9 +118,14 @@ namespace RetroBatFolderSwitcher
             tabs.TabPages.Add(libPage);
             tabs.TabPages.Add(mediaPage);
 
+            var syncPage = new TabPage("Sync") { Padding = new Padding(8), AutoScroll = true };
+            BuildSyncPage(syncPage);
+            tabs.TabPages.Add(syncPage);
+
             // Dock order: Fill first, then Bottom controls top-to-bottom.
             Controls.Add(tabs);
             Controls.Add(buttons);
+            Controls.Add(_status);
             Controls.Add(_output);
 
             var tips = new ToolTip();
@@ -146,6 +157,21 @@ namespace RetroBatFolderSwitcher
 
             FormClosing += OnClosingAsk;
             Shown += (s, e) => { _dirty = false; RefreshNow(); };
+            Load += (s, e) => FitToScreen();
+            Resize += (s, e) => SizeLogBox();
+            KeyDown += (s, e) =>
+            {
+                if (e.Control && e.KeyCode == Keys.S) { Save(true); e.SuppressKeyPress = true; }
+            };
+
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Copy all", null, (s, e) => { if (_output.TextLength > 0) Clipboard.SetText(_output.Text); });
+            menu.Items.Add("Clear", null, (s, e) => _output.Clear());
+            menu.Items.Add("Open log file", null, (s, e) => ShowLog());
+            _output.ContextMenuStrip = menu;
+
+            ResumeLayout(false);
+            PerformLayout();
         }
 
         // ---------- Config <-> UI ----------
@@ -184,6 +210,7 @@ namespace RetroBatFolderSwitcher
             _mediaRoms.Items.Clear();
             foreach (var r in c.MediaRomFolders ?? new List<string>()) _mediaRoms.Items.Add(r);
             UpdateMediaExample();
+            LoadSync(c);
             RefreshLibList(_libs.Count > 0 ? 0 : -1);
             RefreshFolderLists();
         }
@@ -191,7 +218,7 @@ namespace RetroBatFolderSwitcher
         private Config FromUi()
         {
             CommitLib();
-            return new Config
+            var cfgOut = new Config
             {
             Libraries = _libs.Select(l => l.Clone()).ToList(),
             SkipPrefix = _skipPrefix.Text.Trim(),
@@ -214,6 +241,8 @@ namespace RetroBatFolderSwitcher
             DockedFolder = Or(_dockFolder.Text, "roms-docked"),
             DefaultFolder = Or(_defaultFolder.Text, "roms-default"),
             };
+            ApplySync(cfgOut);
+            return cfgOut;
         }
 
         private bool CheckConfig(Config c)
@@ -274,6 +303,7 @@ namespace RetroBatFolderSwitcher
 
         private void SaveAndLaunch()
         {
+            if (_busy) { Out("Wait for the current task to finish (or press Stop)."); return; }
             if (!Save(false)) return;
             var c = FromUi();
             string rb = RbDir(c);
@@ -445,10 +475,10 @@ namespace RetroBatFolderSwitcher
             AddRow(opt, Lbl("Link type"), typeRow);
             AddRow(opt, Lbl(""), _buildOnLaunch);
             var actions = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 4, 0, 0), WrapContents = true };
-            actions.Controls.Add(Btn("Preview (dry run)", () => RunBuild(all: true, rebuild: false, dryRun: true)));
-            actions.Controls.Add(Btn("Build selected", () => RunBuild(all: false, rebuild: false, dryRun: false)));
-            actions.Controls.Add(Btn("Build all", () => RunBuild(all: true, rebuild: false, dryRun: false), bold: true));
-            actions.Controls.Add(Btn("Rebuild all...", () => RunBuild(all: true, rebuild: true, dryRun: false)));
+            actions.Controls.Add(Busy(Btn("Preview (dry run)", () => RunBuild(all: true, rebuild: false, dryRun: true))));
+            actions.Controls.Add(Busy(Btn("Build selected", () => RunBuild(all: false, rebuild: false, dryRun: false))));
+            actions.Controls.Add(Busy(Btn("Build all", () => RunBuild(all: true, rebuild: false, dryRun: false), bold: true)));
+            actions.Controls.Add(Busy(Btn("Rebuild all...", () => RunBuild(all: true, rebuild: true, dryRun: false))));
             opt.Controls.Add(actions, 0, opt.RowCount);
             opt.SetColumnSpan(actions, 3);
             opt.RowCount++;
@@ -617,25 +647,20 @@ namespace RetroBatFolderSwitcher
                         Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             }
 
-            Out("---- " + (dryRun ? "preview" : rebuild ? "rebuild" : "build") + " ----");
-            var log = dryRun ? (Action<string>)Out : s => { Out(s); Program.Log(s); };
-            var b = new LibraryBuilder(log);
-            UseWaitCursor = true;
-            try
+            int idx = _libIdx;
+            RunTask(dryRun ? "Previewing libraries..." : rebuild ? "Rebuilding libraries..." : "Building libraries...",
+                logToFile: !dryRun, work: (log, stop) =>
             {
+                log("---- libraries " + (dryRun ? "preview" : rebuild ? "rebuild" : "build") + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                var b = new LibraryBuilder(log) { Stop = stop };
                 if (all) b.BuildLibraries(c, rebuild, dryRun);
-                else
-                {
-                    b.Build(c, c.Libraries[_libIdx], rebuild, dryRun);
-                }
-            }
-            catch (Exception ex) { Out("ERROR: " + ex.Message); }
-            finally { UseWaitCursor = false; }
-
-            if (b.Failed > 0 && !dryRun)
-                Out("Some links failed. For network sources or Link type 'Symlink', turn on Developer Mode " +
-                    "(Settings > System > For developers) or run this as administrator.");
-            RefreshFolderLists();
+                else b.Build(c, c.Libraries[idx], rebuild, dryRun);
+                if (b.Failed > 0 && !dryRun)
+                    log("Some links failed. For network sources or Link type 'Symlink', turn on Developer Mode " +
+                        "(Settings > System > For developers) or run this as administrator.");
+                return stop() ? "Stopped." : b.Failed > 0 ? b.Failed + " link(s) failed - see the log."
+                     : (dryRun ? "Preview finished: " : "Done: ") + b.Created + " link(s) " + (dryRun ? "would be " : "") + "created.";
+            }, after: RefreshFolderLists);
         }
 
         // ---------- Media tab ----------
@@ -668,9 +693,9 @@ namespace RetroBatFolderSwitcher
             AddRow(g, Lbl("Example"), _mediaExample);
 
             var actions = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 4, 0, 0), WrapContents = true };
-            actions.Controls.Add(Btn("Preview (dry run)", () => RunMedia(rebuild: false, dryRun: true)));
-            actions.Controls.Add(Btn("Create media links", () => RunMedia(rebuild: false, dryRun: false), bold: true));
-            actions.Controls.Add(Btn("Recreate media links...", () => RunMedia(rebuild: true, dryRun: false)));
+            actions.Controls.Add(Busy(Btn("Preview (dry run)", () => RunMedia(rebuild: false, dryRun: true))));
+            actions.Controls.Add(Busy(Btn("Create media links", () => RunMedia(rebuild: false, dryRun: false), bold: true)));
+            actions.Controls.Add(Busy(Btn("Recreate media links...", () => RunMedia(rebuild: true, dryRun: false))));
             g.Controls.Add(actions, 0, g.RowCount);
             g.SetColumnSpan(actions, 3);
             g.RowCount++;
@@ -744,16 +769,55 @@ namespace RetroBatFolderSwitcher
                         Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             }
 
-            Out("---- media links " + (dryRun ? "preview" : rebuild ? "recreate" : "create") + " ----");
-            var log = dryRun ? (Action<string>)Out : s => { Out(s); Program.Log(s); };
-            var b = new LibraryBuilder(log);
-            UseWaitCursor = true;
-            try { b.BuildMedia(c, rebuild, dryRun); }
-            catch (Exception ex) { Out("ERROR: " + ex.Message); }
-            finally { UseWaitCursor = false; }
+            RunTask(dryRun ? "Previewing media links..." : "Creating media links...", logToFile: !dryRun, work: (log, stop) =>
+            {
+                log("---- media links " + (dryRun ? "preview" : rebuild ? "recreate" : "create") + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                var b = new LibraryBuilder(log) { Stop = stop };
+                b.BuildMedia(c, rebuild, dryRun);
+                return stop() ? "Stopped." : b.Failed > 0 ? b.Failed + " media link(s) failed - see the log."
+                     : (dryRun ? "Preview finished: " : "Done: ") + b.Created + " media link(s) " + (dryRun ? "would be " : "") + "created.";
+            });
         }
 
-        private static Control ListWithButtons(ListBox list, params Button[] buttons)
+        /// <summary>Dialogs are laid out at 96 DPI; this scales them like the main window.</summary>
+        private static void ScaleDialog(Form f)
+        {
+            f.AutoScaleDimensions = new SizeF(96F, 96F);
+            f.AutoScaleMode = AutoScaleMode.Dpi;
+            f.ResumeLayout(false);
+            f.PerformLayout();
+        }
+
+        private float DpiScale()
+        {
+            try { using (var g = CreateGraphics()) return Math.Max(1f, g.DpiX / 96f); }
+            catch { return 1f; }
+        }
+
+        /// <summary>Keeps the window on screen (high-DPI handhelds) and sizes the log box.</summary>
+        private void FitToScreen()
+        {
+            var wa = Screen.FromControl(this).WorkingArea;
+            MinimumSize = new Size(Math.Min(MinimumSize.Width, wa.Width), Math.Min(MinimumSize.Height, wa.Height));
+            int w = Math.Min(Width, wa.Width), h = Math.Min(Height, wa.Height);
+            Bounds = new Rectangle(wa.Left + (wa.Width - w) / 2, wa.Top + (wa.Height - h) / 2, w, h);
+            SizeLogBox();
+        }
+
+        private void SizeLogBox()
+        {
+            float k = DpiScale();
+            int h = ClientSize.Height / 6;
+            _output.Height = Math.Max((int)(70 * k), Math.Min((int)(220 * k), h));
+        }
+
+        private Button Busy(Button b)
+        {
+            _busyButtons.Add(b);
+            return b;
+        }
+
+        private static Control ListWithButtons(Control list, params Button[] buttons)
         {
             var t = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Margin = new Padding(0) };
             t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -779,12 +843,14 @@ namespace RetroBatFolderSwitcher
                 MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Font = Font, ClientSize = new Size(480, 110)
             })
             {
+                f.SuspendLayout();
                 var lbl = new Label { Text = text, Left = 10, Top = 10, Width = 460, AutoSize = false, Height = 20 };
                 var tb = new TextBox { Text = value, Left = 10, Top = 34, Width = 460 };
                 var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Left = 314, Top = 72, Width = 75 };
                 var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Left = 395, Top = 72, Width = 75 };
                 f.Controls.AddRange(new Control[] { lbl, tb, ok, cancel });
                 f.AcceptButton = ok; f.CancelButton = cancel;
+                ScaleDialog(f);
                 return f.ShowDialog(this) == DialogResult.OK ? tb.Text : null;
             }
         }

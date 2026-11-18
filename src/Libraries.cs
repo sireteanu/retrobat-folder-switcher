@@ -18,6 +18,9 @@ namespace RetroBatFolderSwitcher
         private readonly Action<string> _log;
         public int Created, Skipped, Failed, Removed, NoMedia;
 
+        /// <summary>Checked between items; return true to stop early.</summary>
+        public Func<bool> Stop = () => false;
+
         public LibraryBuilder(Action<string> log) { _log = log ?? (_ => { }); }
 
         /// <summary>Libraries, then media links (if turned on). Used on launch and from the command line.</summary>
@@ -32,7 +35,7 @@ namespace RetroBatFolderSwitcher
         {
             var groups = (cfg.Libraries ?? new List<LibraryGroup>()).Where(g => g.Enabled).ToList();
             if (groups.Count == 0) _log("No enabled libraries.");
-            foreach (var g in groups) Build(cfg, g, rebuild, dryRun);
+            foreach (var g in groups) { if (Stop()) break; Build(cfg, g, rebuild, dryRun); }
             if (summary) Summary("Libraries", rebuild, dryRun);
         }
 
@@ -73,6 +76,7 @@ namespace RetroBatFolderSwitcher
 
                 foreach (var sysDir in systems.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                 {
+                    if (Stop()) { _log("  Stopped."); return; }
                     string sys = Path.GetFileName(sysDir);
                     if (!string.IsNullOrEmpty(cfg.SkipPrefix) && sys.StartsWith(cfg.SkipPrefix, StringComparison.OrdinalIgnoreCase))
                         continue;
@@ -165,6 +169,7 @@ namespace RetroBatFolderSwitcher
 
                     foreach (var sys in systems.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                     {
+                        if (Stop()) { _log("  Stopped."); return; }
                         string name = Path.GetFileName(sys);
                         if (!string.IsNullOrEmpty(cfg.SkipPrefix) && name.StartsWith(cfg.SkipPrefix, StringComparison.OrdinalIgnoreCase))
                         {

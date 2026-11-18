@@ -11,7 +11,6 @@ namespace RetroBatFolderSwitcher
     ///  - sources are checked in order; the first source that has a system folder wins
     ///  - system folders starting with SkipPrefix (e.g. _media) are skipped
     ///  - anything already in the output folder is left alone
-    ///  - an empty ".tag" marker file is created in the output folder
     /// Only links are ever removed (with rebuild), never real folders or files.
     /// </summary>
     internal class LibraryBuilder
@@ -47,18 +46,6 @@ namespace RetroBatFolderSwitcher
                 {
                     _log("  Creating output folder");
                     if (!dryRun) Directory.CreateDirectory(output);
-                }
-
-                // Tag marker file, e.g. ".local"
-                string tag = (g.Tag ?? "").Trim().TrimStart('.');
-                if (tag.Length > 0)
-                {
-                    string tagFile = Path.Combine(output, "." + tag);
-                    if (!File.Exists(tagFile))
-                    {
-                        _log("  Creating tag file ." + tag);
-                        if (!dryRun) File.WriteAllBytes(tagFile, new byte[0]);
-                    }
                 }
 
                 if (rebuild && Directory.Exists(output))

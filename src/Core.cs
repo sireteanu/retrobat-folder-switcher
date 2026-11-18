@@ -51,29 +51,27 @@ namespace RetroBatFolderSwitcher
         public bool Enabled { get; set; } = true;
         /// <summary>The folder that gets filled with links.</summary>
         public string Output { get; set; } = "";
-        /// <summary>Creates an empty marker file ".tag" in the output folder. Empty = none.</summary>
-        public string Tag { get; set; } = "";
         /// <summary>Checked in order: when two sources have the same system folder, the first one wins.</summary>
         public List<string> Sources { get; set; } = new List<string>();
 
         public override string ToString()
         {
             string name = string.IsNullOrWhiteSpace(Output) ? "(no output folder)" : Output;
-            return (Enabled ? "" : "[off] ") + name + (string.IsNullOrWhiteSpace(Tag) ? "" : "   ." + Tag.TrimStart('.'));
+            return (Enabled ? "" : "[off] ") + name;
         }
 
         public LibraryGroup Clone() => new LibraryGroup
         {
-            Enabled = Enabled, Output = Output, Tag = Tag, Sources = new List<string>(Sources ?? new List<string>())
+            Enabled = Enabled, Output = Output, Sources = new List<string>(Sources ?? new List<string>())
         };
 
         public static List<LibraryGroup> Defaults() => new List<LibraryGroup>
         {
-            new LibraryGroup { Output = @"D:\roms1\roms_local",   Tag = "local",
+            new LibraryGroup { Output = @"D:\roms1\roms_local",
                                Sources = new List<string> { @"E:\roms", @"D:\roms" } },
-            new LibraryGroup { Output = @"D:\roms1\roms_network", Tag = "network",
+            new LibraryGroup { Output = @"D:\roms1\roms_network",
                                Sources = new List<string> { @"Z:\Sync\Platform\RetroBat\NETWORK", @"E:\roms" } },
-            new LibraryGroup { Output = @"D:\roms1\roms_docked",  Tag = "docked",
+            new LibraryGroup { Output = @"D:\roms1\roms_docked",
                                Sources = new List<string> { @"X:\roms", @"Z:\Sync\Platform\RetroBat\NETWORK", @"E:\roms" } },
         };
     }

@@ -40,7 +40,6 @@ namespace RetroBatFolderSwitcher
         private readonly ListBox _libList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
         private readonly CheckBox _libEnabled = new CheckBox { Text = "Enabled", AutoSize = true };
         private readonly TextBox _libOutput = new TextBox();
-        private readonly TextBox _libTag = new TextBox { Width = 140 };
         private readonly ListBox _srcList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, HorizontalScrollbar = true };
         private readonly TextBox _skipPrefix = new TextBox { Width = 70 };
         private readonly ComboBox _linkType = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
@@ -124,7 +123,6 @@ namespace RetroBatFolderSwitcher
 
             _libList.SelectedIndexChanged += (s, e) => { if (_loadingLib) return; CommitLib(); SelectLib(_libList.SelectedIndex); };
             _libOutput.TextChanged += (s, e) => LibEdited();
-            _libTag.TextChanged += (s, e) => LibEdited();
             _libEnabled.CheckedChanged += (s, e) => LibEdited();
             _libOutput.Leave += (s, e) => RefreshFolderLists();
             _skipPrefix.TextChanged += (s, e) => _dirty = true;
@@ -398,10 +396,6 @@ namespace RetroBatFolderSwitcher
             // Editor
             var ed = Grid();
             AddRow(ed, Lbl("Output folder"), _libOutput, Btn("Browse...", BrowseLibOutput));
-            var tagRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
-            tagRow.Controls.Add(_libTag);
-            tagRow.Controls.Add(new Label { Text = "creates an empty marker file \".tag\" in the output folder", AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(8, 7, 3, 3) });
-            AddRow(ed, Lbl("Tag"), tagRow);
             AddRow(ed, Lbl(""), _libEnabled);
             AddRow(ed, Lbl("Sources"), new Label { Text = "Checked in order. If two sources have the same system, the first one wins.", AutoSize = true, ForeColor = SystemColors.GrayText });
             var srcGrid = ListWithButtons(_srcList,
@@ -412,7 +406,7 @@ namespace RetroBatFolderSwitcher
             ed.RowCount++;
             ed.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             var editGroup = Group("Selected library", ed);
-            _libEditor.AddRange(new Control[] { _libOutput, _libTag, _libEnabled, srcGrid });
+            _libEditor.AddRange(new Control[] { _libOutput, _libEnabled, srcGrid });
 
             // Options + actions
             _linkType.Items.AddRange(new object[] { "Auto", "Symlink", "Junction" });
@@ -466,7 +460,6 @@ namespace RetroBatFolderSwitcher
             bool has = i >= 0 && i < _libs.Count;
             foreach (var c in _libEditor) c.Enabled = has;
             _libOutput.Text = has ? _libs[i].Output : "";
-            _libTag.Text = has ? _libs[i].Tag : "";
             _libEnabled.Checked = has && _libs[i].Enabled;
             _srcList.Items.Clear();
             if (has) foreach (var src in _libs[i].Sources ?? new List<string>()) _srcList.Items.Add(src);
@@ -478,7 +471,6 @@ namespace RetroBatFolderSwitcher
             if (_loadingLib || _libIdx < 0 || _libIdx >= _libs.Count) return;
             var g = _libs[_libIdx];
             g.Output = _libOutput.Text.Trim();
-            g.Tag = _libTag.Text.Trim().TrimStart('.');
             g.Enabled = _libEnabled.Checked;
             g.Sources = _srcList.Items.Cast<string>().ToList();
         }

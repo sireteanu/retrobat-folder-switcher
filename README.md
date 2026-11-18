@@ -51,7 +51,6 @@ The **Libraries** tab builds the folders the rules point at, the same way `creat
 - **Sources are checked in order.** If two sources have the same system, the first one wins.
 - Folders starting with the **skip prefix** (default `_`, e.g. `_media`) aren't linked.
 - Anything already in the output folder is left alone, and sources that don't exist (an unplugged drive) are skipped with a warning.
-- **Tag** creates an empty marker file such as `.local` in the output folder.
 - **Build all** adds links for any new systems. **Rebuild all** removes the existing links and recreates them, which you need after changing the source order. Only links are ever removed, never real folders or files.
 - **Add links for new systems every time RetroBat is launched** runs *Build all* before switching.
 - To use a library, pick its output folder (e.g. `D:\roms1\roms_local`) as a rule's folder on the first tab. Full paths work.
@@ -83,7 +82,7 @@ Settings are stored in `FolderSwitcher.json` next to the exe (created on first r
   "DockedFolder": "roms-docked",
   "DefaultFolder": "roms-default",
   "Libraries": [
-    { "Enabled": true, "Output": "D:\\roms1\\roms_local", "Tag": "local", "Sources": [ "E:\\roms", "D:\\roms" ] }
+    { "Enabled": true, "Output": "D:\\roms1\\roms_local", "Sources": [ "E:\\roms", "D:\\roms" ] }
   ],
   "SkipPrefix": "_",
   "LinkType": "Auto",

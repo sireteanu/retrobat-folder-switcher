@@ -58,10 +58,13 @@ namespace RetroBatFolderSwitcher
                 return 0;
             }
 
-            if (cfg.BuildLibrariesOnLaunch)
+            if (cfg.BuildLibrariesOnLaunch || cfg.MediaLinksOnLaunch)
             {
-                try { new LibraryBuilder(Log).BuildAll(cfg, rebuild: false, dryRun: dryRun); }
+                var b = new LibraryBuilder(Log);
+                try { if (cfg.BuildLibrariesOnLaunch) b.BuildLibraries(cfg, rebuild: false, dryRun: dryRun); }
                 catch (Exception ex) { Log("ERROR building libraries: " + ex.Message); }
+                try { if (cfg.MediaLinksOnLaunch) b.BuildMedia(cfg, rebuild: false, dryRun: dryRun); }
+                catch (Exception ex) { Log("ERROR creating media links: " + ex.Message); }
             }
 
             try { sw.Apply(cfg, rbDir, dryRun); }

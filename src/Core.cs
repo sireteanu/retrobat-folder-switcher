@@ -36,19 +36,17 @@ namespace RetroBatFolderSwitcher
         /// <summary>Folders that get built out of per-system links to the source folders.</summary>
         public List<LibraryGroup> Libraries { get; set; } = LibraryGroup.Defaults();
 
-        /// <summary>System folders starting with this are not linked (e.g. _media). Empty = link everything.</summary>
-        public string SkipPrefix { get; set; } = "_";
 
         /// <summary>Auto (symlink, else junction), Symlink, or Junction.</summary>
         public string LinkType { get; set; } = "Auto";
 
-        /// <summary>Add links for new system folders every time RetroBat is launched.</summary>
+        /// <summary>Add library links for new system folders before RetroBat is launched.</summary>
         public bool BuildLibrariesOnLaunch { get; set; } = false;
 
         // ---------- Media links ----------
 
-        /// <summary>Adds &lt;rom folder&gt;\&lt;system&gt;\media links pointing at &lt;MediaFolder&gt;\&lt;system&gt;\media.</summary>
-        public bool MediaLinksEnabled { get; set; } = true;
+        /// <summary>Add &lt;rom folder&gt;\&lt;system&gt;\media links before RetroBat is launched.</summary>
+        public bool MediaLinksOnLaunch { get; set; } = false;
         /// <summary>Holds one folder per system, each containing a "media" folder (copy of MEDIA_FULL).</summary>
         public string MediaFolder { get; set; } = @"C:\Games\RetroBat\media";
         /// <summary>Rom folders whose system folders get a media link (e.g. the robocopy /XD media destination).</summary>
@@ -166,9 +164,22 @@ namespace RetroBatFolderSwitcher
 
         // ---------- Rules ----------
 
+        /// <summary>Rules in order: 1) docked drives, 2) home Wi-Fi, 3) anywhere else.</summary>
         public string ChooseFolder(Config cfg, out string reason)
         {
-            // 1) Wi-Fi
+            // 1) Docked: all listed drives connected
+            if (cfg.DockedRuleEnabled && cfg.DockedDrives != null && cfg.DockedDrives.Count > 0)
+            {
+                var states = cfg.DockedDrives.Select(d => new { Drive = d, Ready = DriveReady(d) }).ToList();
+                _log("Drives: " + string.Join(", ", states.Select(s => s.Drive + (s.Ready ? " connected" : " missing"))));
+                if (states.All(s => s.Ready))
+                {
+                    reason = "Docked (" + string.Join(" + ", cfg.DockedDrives) + " connected)";
+                    return cfg.DockedFolder;
+                }
+            }
+
+            // 2) Home Wi-Fi
             if (cfg.WifiRuleEnabled && !string.IsNullOrWhiteSpace(cfg.WifiSsidContains))
             {
                 var ssids = Wifi.GetConnectedSsids();
@@ -176,25 +187,13 @@ namespace RetroBatFolderSwitcher
                 var hit = ssids.FirstOrDefault(s => s.IndexOf(cfg.WifiSsidContains.Trim(), StringComparison.OrdinalIgnoreCase) >= 0);
                 if (hit != null)
                 {
-                    reason = "Wi-Fi '" + hit + "'";
+                    reason = "Home Wi-Fi ('" + hit + "')";
                     return cfg.WifiFolder;
                 }
             }
 
-            // 2) Docked drives
-            if (cfg.DockedRuleEnabled && cfg.DockedDrives != null && cfg.DockedDrives.Count > 0)
-            {
-                var states = cfg.DockedDrives.Select(d => new { Drive = d, Ready = DriveReady(d) }).ToList();
-                _log("Drives: " + string.Join(", ", states.Select(s => s.Drive + (s.Ready ? " ready" : " missing"))));
-                if (states.All(s => s.Ready))
-                {
-                    reason = "drives " + string.Join(" + ", cfg.DockedDrives) + " present";
-                    return cfg.DockedFolder;
-                }
-            }
-
-            // 3) Default
-            reason = "default";
+            // 3) Anywhere else
+            reason = "Anywhere else";
             return cfg.DefaultFolder;
         }
 

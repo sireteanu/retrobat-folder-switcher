@@ -9,7 +9,6 @@ namespace RetroBatFolderSwitcher
     /// Builds each library's output folder out of links to the system folders found in its sources
     /// (same behaviour as create_symlinks_win_multiple.bat):
     ///  - sources are checked in order; the first source that has a system folder wins
-    ///  - system folders starting with SkipPrefix (e.g. _media) are skipped
     ///  - anything already in the output folder is left alone
     /// Only links are ever removed (with rebuild), never real folders or files.
     /// </summary>
@@ -27,7 +26,7 @@ namespace RetroBatFolderSwitcher
         public void BuildAll(Config cfg, bool rebuild, bool dryRun)
         {
             BuildLibraries(cfg, rebuild, dryRun, summary: false);
-            if (cfg.MediaLinksEnabled) BuildMedia(cfg, rebuild, dryRun, summary: false);
+            BuildMedia(cfg, rebuild, dryRun, summary: false);
             Summary("All links", rebuild, dryRun);
         }
 
@@ -78,9 +77,6 @@ namespace RetroBatFolderSwitcher
                 {
                     if (Stop()) { _log("  Stopped."); return; }
                     string sys = Path.GetFileName(sysDir);
-                    if (!string.IsNullOrEmpty(cfg.SkipPrefix) && sys.StartsWith(cfg.SkipPrefix, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
                     string source = Path.Combine(Path.Combine(mediaRoot, sys), name);
                     if (!Directory.Exists(source)) { NoMedia++; continue; }
 
@@ -171,11 +167,6 @@ namespace RetroBatFolderSwitcher
                     {
                         if (Stop()) { _log("  Stopped."); return; }
                         string name = Path.GetFileName(sys);
-                        if (!string.IsNullOrEmpty(cfg.SkipPrefix) && name.StartsWith(cfg.SkipPrefix, StringComparison.OrdinalIgnoreCase))
-                        {
-                            Skipped++;
-                            continue;
-                        }
                         if (!claimed.Add(name)) { Skipped++; continue; } // an earlier source already provides it
 
                         string target = Path.Combine(output, name);

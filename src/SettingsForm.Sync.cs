@@ -1,16 +1,14 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Threading;
 using System.Windows.Forms;
 
 namespace RetroBatFolderSwitcher
 {
-    // The "Sync" tab: individually runnable robocopy mirror jobs.
+    // "Sync" tab: robocopy mirror jobs, run one or several at a time.
     internal partial class SettingsForm
     {
         private List<SyncJob> _romJobs = new List<SyncJob>();
@@ -19,113 +17,58 @@ namespace RetroBatFolderSwitcher
         private readonly ListView _mediaView = JobView(media: true);
         private readonly TextBox _roboOpts = new TextBox();
 
-        // Background tasks (robocopy, library and media builds) share one runner, status line and Stop button.
-        private readonly List<Button> _busyButtons = new List<Button>();
-        private Button _stopBtn;
-        private readonly Label _status = new Label { Dock = DockStyle.Bottom, Height = 22, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, Text = "Ready." };
-        private volatile bool _busy, _stopRequested;
-        private readonly ConcurrentQueue<string> _taskLines = new ConcurrentQueue<string>();
-        private System.Windows.Forms.Timer _flushTimer;
-        private StreamWriter _taskLog;
-        private readonly object _taskLogLock = new object();
-
-        private void BuildSyncPage(TabPage page)
+        private Control BuildSyncTab()
         {
-            var intro = new Label
-            {
-                Dock = DockStyle.Top, AutoSize = false, Height = 38,
-                Text = "Mirror folders with robocopy /MIR. Select one or more jobs and run just those. " +
-                       "Output files that aren't in the input are deleted, except in excluded folders. Use Preview first."
-            };
+            var intro = Hint("Mirror folders with robocopy. Select one or more jobs and run only those. " +
+                             "Files in the output that aren't in the input are deleted.");
 
-            // Rom sync
-            var romGrid = Grid();
-            var romList = ListWithButtons(_romView,
-                Btn("Add...", () => AddJob(false)), Btn("Edit...", () => EditSelected(false)), Btn("Remove", () => RemoveJob(false)),
-                Btn("Up", () => MoveJob(false, -1)), Btn("Down", () => MoveJob(false, 1)));
-            romGrid.Controls.Add(romList, 0, romGrid.RowCount);
-            romGrid.SetColumnSpan(romList, 3);
-            romGrid.RowCount++;
-            romGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var romActions = ActionRow(false);
-            romGrid.Controls.Add(romActions, 0, romGrid.RowCount);
-            romGrid.SetColumnSpan(romActions, 3);
-            romGrid.RowCount++;
-            romGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var romGroup = Group("Rom sync   (robocopy IN OUT /MIR /XD media)", romGrid);
+            var romBox = FillGroup("Rom sync   -   robocopy IN OUT /MIR /XD media", JobPanel(false));
+            var mediaBox = FillGroup("Media sync   -   robocopy IN OUT /MIR /XD <excluded folders>", JobPanel(true));
 
-            // Media sync
-            var medGrid = Grid();
-            var medList = ListWithButtons(_mediaView,
-                Btn("Add...", () => AddJob(true)), Btn("Edit...", () => EditSelected(true)), Btn("Remove", () => RemoveJob(true)),
-                Btn("Up", () => MoveJob(true, -1)), Btn("Down", () => MoveJob(true, 1)));
-            medGrid.Controls.Add(medList, 0, medGrid.RowCount);
-            medGrid.SetColumnSpan(medList, 3);
-            medGrid.RowCount++;
-            medGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var medActions = ActionRow(true);
-            medGrid.Controls.Add(medActions, 0, medGrid.RowCount);
-            medGrid.SetColumnSpan(medActions, 3);
-            medGrid.RowCount++;
-            medGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var medGroup = Group("Media sync   (robocopy IN OUT /MIR /XD <excluded folders>)", medGrid);
-
-            // Options
-            var opt = Grid();
-            AddRow(opt, Lbl("Extra robocopy options"), _roboOpts);
-            var optGroup = Group("Options", opt);
-
-            page.Controls.Add(optGroup);   // Top-docked: added bottom-to-top
-            page.Controls.Add(medGroup);
-            page.Controls.Add(romGroup);
-            page.Controls.Add(intro);
+            var opts = Grid();
+            AddRow(opts, Lbl("Extra robocopy options"), _roboOpts);
 
             _romView.DoubleClick += (s, e) => EditSelected(false);
             _mediaView.DoubleClick += (s, e) => EditSelected(true);
-            _roboOpts.TextChanged += (s, e) => _dirty = true;
-
-            var tips = new ToolTip();
-            tips.SetToolTip(_roboOpts, "Added to every sync. /R:2 /W:5 = retry failed files twice, 5 s apart (robocopy's default waits for ages). /NP = no % progress in the log.");
-            tips.SetToolTip(_romView, "Double-click to edit. Ctrl/Shift-click to select several.");
-            tips.SetToolTip(_mediaView, "Double-click to edit. Ctrl/Shift-click to select several.");
-
-            _flushTimer = new System.Windows.Forms.Timer { Interval = 150 };
-            _flushTimer.Tick += (s, e) => FlushTaskLines();
-            _flushTimer.Start();
-
-            FormClosing += (s, e) =>
+            foreach (var v in new[] { _romView, _mediaView })
             {
-                if (e.Cancel || !_busy) return;
-                if (MessageBox.Show(this, "A task is still running. Stop it and close?", Text,
-                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) { e.Cancel = true; return; }
-                _stopRequested = true;
-                for (int i = 0; i < 50 && _busy; i++) { Thread.Sleep(100); Application.DoEvents(); }
-            };
+                var view = v;
+                view.KeyDown += (s, e) =>
+                {
+                    if (e.Control && e.KeyCode == Keys.A) { foreach (ListViewItem it in view.Items) it.Selected = true; e.SuppressKeyPress = true; }
+                };
+                _tips.SetToolTip(view, "Ctrl/Shift-click to select several jobs, Ctrl+A for all. Double-click to edit.");
+            }
+            _tips.SetToolTip(_roboOpts, "Added to every job. /R:2 /W:5 = retry a failed file twice, 5 s apart " +
+                                        "(robocopy's default can wait for days). /NP = no % progress in the log.");
+
+            return StackWithFill(new Control[] { intro, romBox, mediaBox, opts }, new HashSet<Control> { romBox, mediaBox });
         }
 
-        private Control ActionRow(bool media)
+        private Control JobPanel(bool media)
         {
-            var row = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 4, 0, 0), WrapContents = true };
-            var a = Btn("Preview selected", () => RunJobs(media, selectedOnly: true, preview: true));
-            var b = Btn("Run selected", () => RunJobs(media, selectedOnly: true, preview: false), bold: true);
-            var c = Btn("Run all...", () => RunJobs(media, selectedOnly: false, preview: false));
-            row.Controls.AddRange(new Control[] { a, b, c });
-            _busyButtons.AddRange(new[] { a, b, c });
-            return row;
+            var view = JobList(media);
+            var preview = Busy(Btn("Preview", () => RunJobs(media, preview: true)));
+            var run = Busy(Btn("Run", () => RunJobs(media, preview: false), bold: true));
+            var row = ButtonRow(
+                Btn("Add...", () => AddJob(media)), Btn("Edit...", () => EditSelected(media)), Btn("Remove", () => RemoveJob(media)),
+                new Label { Width = 24 },
+                preview, run);
+            _tips.SetToolTip(preview, "Runs robocopy with /L: lists what would be copied and deleted, changes nothing.");
+            _tips.SetToolTip(run, "Mirrors the selected job(s). You'll be asked to confirm first.");
+            return StackWithFill(new Control[] { view, row }, new HashSet<Control> { view });
         }
 
         private static ListView JobView(bool media)
         {
-            float k;
-            using (var g = Graphics.FromHwnd(IntPtr.Zero)) k = Math.Max(1f, g.DpiX / 96f);
             var v = new ListView
             {
                 View = View.Details, FullRowSelect = true, MultiSelect = true, HideSelection = false,
-                Dock = DockStyle.Fill, GridLines = true, HeaderStyle = ColumnHeaderStyle.Nonclickable
+                GridLines = true, HeaderStyle = ColumnHeaderStyle.Nonclickable
             };
-            v.Columns.Add("Input folder", (int)((media ? 230 : 300) * k));
-            v.Columns.Add("Output folder", (int)((media ? 190 : 250) * k));
-            if (media) v.Columns.Add("Excluded folders", (int)(200 * k));
+            v.Columns.Add("Input folder", 260);
+            v.Columns.Add("Output folder", 200);
+            if (media) v.Columns.Add("Excluded folders", 200);
             return v;
         }
 
@@ -136,8 +79,8 @@ namespace RetroBatFolderSwitcher
             _romJobs = (c.RomSyncs ?? new List<SyncJob>()).Select(j => j.Clone()).ToList();
             _mediaJobs = (c.MediaSyncs ?? new List<SyncJob>()).Select(j => j.Clone()).ToList();
             _roboOpts.Text = c.RobocopyOptions ?? "";
-            RefreshJobs(false, 0);
-            RefreshJobs(true, 0);
+            RefreshJobs(false, -1);
+            RefreshJobs(true, -1);
         }
 
         private void ApplySync(Config c)
@@ -182,7 +125,7 @@ namespace RetroBatFolderSwitcher
         private void AddJob(bool media)
         {
             var j = new SyncJob();
-            if (!EditJobDialog(j, media, "Add " + (media ? "media" : "rom") + " sync")) return;
+            if (!EditJobDialog(j, media, media ? "Add media sync" : "Add rom sync")) return;
             Jobs(media).Add(j);
             _dirty = true;
             RefreshJobs(media, Jobs(media).Count - 1);
@@ -193,7 +136,7 @@ namespace RetroBatFolderSwitcher
             int i = FirstSelected(media);
             if (i < 0) return;
             var j = Jobs(media)[i].Clone();
-            if (!EditJobDialog(j, media, "Edit " + (media ? "media" : "rom") + " sync")) return;
+            if (!EditJobDialog(j, media, media ? "Edit media sync" : "Edit rom sync")) return;
             Jobs(media)[i] = j;
             _dirty = true;
             RefreshJobs(media, i);
@@ -208,34 +151,19 @@ namespace RetroBatFolderSwitcher
             RefreshJobs(media, Math.Min(i, Jobs(media).Count - 1));
         }
 
-        private void MoveJob(bool media, int d)
-        {
-            int i = FirstSelected(media), j = i + d;
-            var list = Jobs(media);
-            if (i < 0 || j < 0 || j >= list.Count) return;
-            var t = list[i]; list[i] = list[j]; list[j] = t;
-            _dirty = true;
-            RefreshJobs(media, j);
-        }
-
         private bool EditJobDialog(SyncJob job, bool media, string title)
         {
             using (var f = new Form
             {
                 Text = title, FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent,
                 MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Font = Font,
-                ClientSize = new Size(560, media ? 210 : 150)
+                ClientSize = new Size(560, media ? 200 : 150)
             })
             {
                 f.SuspendLayout();
                 var src = new TextBox { Text = job.Source, Left = 120, Top = 14, Width = 330 };
                 var dst = new TextBox { Text = job.Destination, Left = 120, Top = 48, Width = 330 };
                 var ex = new TextBox { Text = JoinExcludes(job.Exclude), Left = 120, Top = 82, Width = 420, Visible = media };
-                var exHint = new Label
-                {
-                    Text = "Folder names separated by spaces or commas. Quote names with spaces: \"my folder\"", Left = 120, Top = 108,
-                    AutoSize = true, ForeColor = SystemColors.GrayText, Visible = media
-                };
                 Func<TextBox, Button> browse = tb =>
                 {
                     var b = new Button { Text = "Browse...", Left = 458, Top = tb.Top - 2, Width = 82, Height = 26 };
@@ -251,10 +179,11 @@ namespace RetroBatFolderSwitcher
                 };
                 var note = new Label
                 {
-                    Text = media ? "" : "media folders are always excluded.",
-                    Left = 120, Top = 80, AutoSize = true, ForeColor = SystemColors.GrayText, Visible = !media
+                    Text = media ? "Folder names, separated by spaces or commas. Quote names with spaces: \"my folder\""
+                                 : "media folders are always excluded.",
+                    Left = 120, Top = media ? 108 : 80, AutoSize = true, ForeColor = SystemColors.GrayText
                 };
-                int by = media ? 166 : 110;
+                int by = media ? 156 : 108;
                 var ok = new Button { Text = "OK", Left = 384, Top = by, Width = 75, Height = 28 };
                 var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Left = 465, Top = by, Width = 75, Height = 28 };
                 ok.Click += (s, e) =>
@@ -270,7 +199,7 @@ namespace RetroBatFolderSwitcher
                 {
                     new Label { Text = "Input folder", Left = 12, Top = 17, AutoSize = true }, src, browse(src),
                     new Label { Text = "Output folder", Left = 12, Top = 51, AutoSize = true }, dst, browse(dst),
-                    new Label { Text = "Excluded folders", Left = 12, Top = 85, AutoSize = true, Visible = media }, ex, exHint,
+                    new Label { Text = "Excluded folders", Left = 12, Top = 85, AutoSize = true, Visible = media }, ex,
                     note, ok, cancel
                 });
                 f.AcceptButton = ok; f.CancelButton = cancel;
@@ -289,15 +218,13 @@ namespace RetroBatFolderSwitcher
 
         // ---------- running ----------
 
-        private void RunJobs(bool media, bool selectedOnly, bool preview)
+        private void RunJobs(bool media, bool preview)
         {
             if (_busy) { Out("Busy - wait for the current task or press Stop."); return; }
 
             var list = Jobs(media);
-            var idx = selectedOnly
-                ? JobList(media).SelectedIndices.Cast<int>().OrderBy(i => i).ToList()
-                : Enumerable.Range(0, list.Count).ToList();
-            if (idx.Count == 0) { Out(selectedOnly ? "Select a job first (Ctrl/Shift-click for several)." : "No jobs."); return; }
+            var idx = JobList(media).SelectedIndices.Cast<int>().OrderBy(i => i).ToList();
+            if (idx.Count == 0) { Out("Select a job first (Ctrl/Shift-click for several, Ctrl+A for all)."); return; }
 
             string opts = _roboOpts.Text.Trim();
             var runs = new List<Tuple<string, string>>(); // (label, args)
@@ -305,7 +232,7 @@ namespace RetroBatFolderSwitcher
             foreach (int i in idx)
             {
                 var j = list[i];
-                string label = (media ? "Media" : "Rom") + " sync " + (i + 1) + ": " + j.Source + "  ->  " + j.Destination;
+                string label = (media ? "Media" : "Rom") + " sync: " + j.Source + "  ->  " + j.Destination;
                 string why = Robocopy.Check(j);
                 if (why != null) { problems.Add(label + "\n    " + why); continue; }
                 runs.Add(Tuple.Create(label, Robocopy.BuildArgs(j, romSync: !media, options: opts, preview: preview)));
@@ -328,14 +255,14 @@ namespace RetroBatFolderSwitcher
                 if (MessageBox.Show(this, sb.ToString(), Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
             }
 
-            RunTask("Syncing...", logToFile: !preview, work: (log, stop) =>
+            RunTask(preview ? "Previewing sync..." : "Syncing...", logToFile: !preview, work: (log, stop) =>
             {
                 int failed = 0;
-                log("==== " + (preview ? "PREVIEW (nothing is changed)" : "SYNC") + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                log("==== " + (preview ? "SYNC PREVIEW (nothing is changed)" : "SYNC") + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                 for (int n = 0; n < runs.Count; n++)
                 {
                     var r = runs[n];
-                    SetStatusAsync("Running " + (n + 1) + " of " + runs.Count + ": " + r.Item1);
+                    SetStatusAsync((preview ? "Previewing " : "Syncing ") + (n + 1) + " of " + runs.Count + ": " + r.Item1);
                     log("");
                     log("==== " + r.Item1);
                     log("==== robocopy " + r.Item2);
@@ -348,86 +275,8 @@ namespace RetroBatFolderSwitcher
                 }
                 log("==== done" + (failed > 0 ? " - " + failed + " job(s) failed" : ""));
                 return stop() ? "Stopped." : failed > 0 ? failed + " sync job(s) failed - see the log."
-                     : (preview ? "Preview finished." : "Sync finished.");
+                     : (preview ? "Preview finished - nothing was changed." : "Sync finished.");
             });
-        }
-
-        // ---------- shared background task runner ----------
-
-        /// <summary>
-        /// Runs work on a background thread. work(log, stopRequested) returns the final status text.
-        /// Output goes to the log box (batched) and, when logToFile, to the log file.
-        /// </summary>
-        private void RunTask(string status, bool logToFile, Func<Action<string>, Func<bool>, string> work, Action after = null)
-        {
-            if (_busy) { Out("Busy - wait for the current task or press Stop."); return; }
-            SetBusy(true);
-            _stopRequested = false;
-            _status.Text = status;
-            if (logToFile)
-            {
-                Program.TrimLogPublic();
-                try { _taskLog = new StreamWriter(Program.LogPath, append: true, encoding: new UTF8Encoding(false)); }
-                catch { _taskLog = null; }
-            }
-
-            Func<bool> stop = () => _stopRequested;
-            var t = new Thread(() =>
-            {
-                string result = "Finished.";
-                try { result = work(TaskLine, stop) ?? result; }
-                catch (Exception ex) { TaskLine("ERROR: " + ex.Message); result = "Failed - see the log."; }
-                finally
-                {
-                    lock (_taskLogLock) { try { _taskLog?.Dispose(); } catch { } _taskLog = null; }
-                    try
-                    {
-                        BeginInvoke((Action)(() =>
-                        {
-                            FlushTaskLines();
-                            SetBusy(false);
-                            _status.Text = result;
-                            after?.Invoke();
-                        }));
-                    }
-                    catch { }
-                }
-            }) { IsBackground = true, Name = "task" };
-            t.Start();
-        }
-
-        private void TaskLine(string line)
-        {
-            _taskLines.Enqueue(line);
-            lock (_taskLogLock) { try { _taskLog?.WriteLine(line); } catch { } }
-        }
-
-        private void SetStatusAsync(string text)
-        {
-            try { BeginInvoke((Action)(() => _status.Text = text)); } catch { }
-        }
-
-        private void FlushTaskLines()
-        {
-            if (_taskLines.IsEmpty) return;
-            var sb = new StringBuilder();
-            while (_taskLines.TryDequeue(out string l))
-            {
-                if (sb.Length > 0) sb.Append("\r\n");
-                sb.Append(l);
-            }
-            // Keep the on-screen log manageable; the full output is in the log file.
-            if (_output.TextLength > 2000000)
-                _output.Text = "(earlier output trimmed - see Show log)\r\n" + _output.Text.Substring(_output.TextLength - 500000);
-            Out(sb.ToString());
-        }
-
-        private void SetBusy(bool busy)
-        {
-            _busy = busy;
-            foreach (var b in _busyButtons) b.Enabled = !busy;
-            if (_stopBtn != null) _stopBtn.Enabled = busy;
-            Cursor = busy ? Cursors.AppStarting : Cursors.Default;
         }
     }
 }

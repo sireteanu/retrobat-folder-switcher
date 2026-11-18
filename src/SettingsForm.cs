@@ -1,168 +1,84 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace RetroBatFolderSwitcher
 {
+    /// <summary>
+    /// Settings window. Tabs: Launch (this file), Libraries + Media links (SettingsForm.Links.cs), Sync (SettingsForm.Sync.cs).
+    /// Below the tabs: the Activity log (with status + Stop) and Save / Save & launch / Close.
+    /// </summary>
     internal partial class SettingsForm : Form
     {
+        // ---- Launch tab ----
+        private readonly CheckBox _dockOn = RuleHeader("1.  Docked");
+        private readonly TextBox _drives = new TextBox();
+        private readonly ComboBox _dockFolder = FolderCombo();
+        private readonly CheckBox _wifiOn = RuleHeader("2.  Home Wi-Fi");
+        private readonly TextBox _ssid = new TextBox();
+        private readonly ComboBox _wifiFolder = FolderCombo();
+        private readonly ComboBox _defaultFolder = FolderCombo();
+        private readonly Label _now = new Label { AutoSize = true, Margin = new Padding(3, 8, 3, 3) };
+        private readonly CheckBox _libsOnLaunch = new CheckBox { Text = "Update library links", AutoSize = true, Margin = new Padding(3, 3, 24, 3) };
+        private readonly CheckBox _mediaOnLaunch = new CheckBox { Text = "Update media links", AutoSize = true };
         private readonly TextBox _rbPath = new TextBox();
         private readonly TextBox _exe = new TextBox();
         private readonly TextBox _args = new TextBox();
         private readonly TextBox _link = new TextBox();
 
-        private readonly CheckBox _wifiOn = new CheckBox { Text = "1. If Wi-Fi name contains", AutoSize = true };
-        private readonly TextBox _ssid = new TextBox();
-        private readonly ComboBox _wifiFolder = FolderCombo();
-
-        private readonly CheckBox _dockOn = new CheckBox { Text = "2. Else if all these drives exist", AutoSize = true };
-        private readonly TextBox _drives = new TextBox();
-        private readonly ComboBox _dockFolder = FolderCombo();
-
-        private readonly ComboBox _defaultFolder = FolderCombo();
-
-        private readonly Label _now = new Label { AutoSize = true, ForeColor = SystemColors.GrayText };
+        // ---- Activity area + background tasks ----
         private readonly TextBox _output = new TextBox
         {
-            Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
-            Dock = DockStyle.Bottom, Height = 130, Font = new Font("Consolas", 9f), BackColor = SystemColors.Window
+            Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, WordWrap = false,
+            Dock = DockStyle.Bottom, Height = 140, Font = new Font("Consolas", 9f), BackColor = SystemColors.Window
         };
+        private readonly Label _status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, Text = "Ready." };
+        private Button _stopBtn;
+        private readonly List<Button> _busyButtons = new List<Button>();
+        private volatile bool _busy, _stopRequested;
+        private readonly ConcurrentQueue<string> _taskLines = new ConcurrentQueue<string>();
+        private readonly System.Windows.Forms.Timer _flushTimer = new System.Windows.Forms.Timer { Interval = 150 };
+        private StreamWriter _taskLog;
+        private readonly object _taskLogLock = new object();
 
-        // Libraries tab
-        private List<LibraryGroup> _libs = new List<LibraryGroup>();
-        private int _libIdx = -1;
-        private bool _loadingLib;
-        private readonly ListBox _libList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
-        private readonly CheckBox _libEnabled = new CheckBox { Text = "Enabled", AutoSize = true };
-        private readonly TextBox _libOutput = new TextBox();
-        private readonly ListBox _srcList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, HorizontalScrollbar = true };
-        private readonly TextBox _skipPrefix = new TextBox { Width = 70 };
-        private readonly ComboBox _linkType = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
-        private readonly CheckBox _buildOnLaunch = new CheckBox { Text = "Update library and media links every time RetroBat is launched", AutoSize = true };
-
-        // Media tab
-        private readonly CheckBox _mediaOn = new CheckBox { Text = "Create media links (also when RetroBat is launched, if that option is on)", AutoSize = true };
-        private readonly TextBox _mediaFolder = new TextBox();
-        private readonly TextBox _mediaName = new TextBox { Width = 100 };
-        private readonly ListBox _mediaRoms = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, HorizontalScrollbar = true };
-        private readonly Label _mediaExample = new Label { AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(3, 4, 3, 6) };
-        private readonly List<Control> _libEditor = new List<Control>();
-
-        private bool _dirty;
+        private readonly ToolTip _tips = new ToolTip { AutoPopDelay = 15000 };
+        private bool _dirty, _loading;
 
         public SettingsForm()
         {
-            Text = "RetroBat Folder Switcher - Settings";
             SuspendLayout();
-            AutoScaleDimensions = new SizeF(96F, 96F);   // designed at 100%; scaled up on high-DPI screens
+            AutoScaleDimensions = new SizeF(96F, 96F);   // laid out at 100%; scaled up on high-DPI screens
             AutoScaleMode = AutoScaleMode.Dpi;
             Font = new Font("Segoe UI", 9f);
-            KeyPreview = true;
+            Text = "RetroBat Folder Switcher";
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(820, 860);
-            MinimumSize = new Size(560, 460);
+            MinimumSize = new Size(600, 520);
+            KeyPreview = true;
             try { Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location); } catch { }
 
-            Padding = new Padding(10);
+            var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(14, 5) };
+            tabs.TabPages.Add(Page("Launch", BuildLaunchTab()));
+            tabs.TabPages.Add(Page("Libraries", BuildLibrariesTab()));
+            tabs.TabPages.Add(Page("Media links", BuildMediaTab()));
+            tabs.TabPages.Add(Page("Sync", BuildSyncTab()));
 
-            // ---- General ----
-            var g = Grid();
-            AddRow(g, Lbl("RetroBat folder"), _rbPath, Btn("Browse...", BrowseRetroBat));
-            AddRow(g, Lbl("RetroBat executable"), _exe);
-            AddRow(g, Lbl("Launch arguments"), _args);
-            AddRow(g, Lbl("Folder RetroBat reads"), _link);
-            var generalGroup = Group("General", g);
+            var activity = BuildActivityHeader();
+            var bar = BuildButtonBar();
 
-            // ---- Rules ----
-            var r = Grid();
-            AddRow(r, _wifiOn, _ssid, Btn("Use current", UseCurrentWifi));
-            AddRow(r, Lbl("      use folder"), _wifiFolder, Btn("Open", () => OpenSub(_wifiFolder.Text)));
-            AddRow(r, Spacer(), Spacer());
-            AddRow(r, _dockOn, _drives, Btn("Check", CheckDrives));
-            AddRow(r, Lbl("      use folder"), _dockFolder, Btn("Open", () => OpenSub(_dockFolder.Text)));
-            AddRow(r, Spacer(), Spacer());
-            AddRow(r, Lbl("3. Otherwise use folder"), _defaultFolder, Btn("Open", () => OpenSub(_defaultFolder.Text)));
-            AddRow(r, Spacer(), Spacer());
-            AddRow(r, Lbl("Right now"), _now, Btn("Refresh", RefreshNow));
-            var rulesGroup = Group("Rules (checked top to bottom, first match wins)", r);
-
-            // ---- Buttons ----
-            var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 6, 0, 6) };
-            buttons.Controls.Add(Btn("Test (dry run)", TestDryRun));
-            buttons.Controls.Add(Btn("Show log", ShowLog));
-            buttons.Controls.Add(Btn("Desktop shortcuts", CreateShortcuts));
-            buttons.Controls.Add(Btn("Save", () => Save(true)));
-            buttons.Controls.Add(Busy(Btn("Save && launch RetroBat", SaveAndLaunch, bold: true)));
-            buttons.Controls.Add(Btn("Close", Close));
-            _stopBtn = Btn("Stop", () => { _stopRequested = true; _status.Text = "Stopping..."; });
-            _stopBtn.Enabled = false;
-            buttons.Controls.Add(_stopBtn);
-
-            var switchPage = new TabPage("Folder switching") { Padding = new Padding(8), AutoScroll = true };
-            switchPage.Controls.Add(rulesGroup);   // Top-docked: added bottom-to-top
-            switchPage.Controls.Add(generalGroup);
-
-            var libPage = new TabPage("Libraries") { Padding = new Padding(8), AutoScroll = true };
-            BuildLibrariesPage(libPage);
-
-            var mediaPage = new TabPage("Media links") { Padding = new Padding(8), AutoScroll = true };
-            BuildMediaPage(mediaPage);
-
-            var tabs = new TabControl { Dock = DockStyle.Fill };
-            tabs.TabPages.Add(switchPage);
-            tabs.TabPages.Add(libPage);
-            tabs.TabPages.Add(mediaPage);
-
-            var syncPage = new TabPage("Sync") { Padding = new Padding(8), AutoScroll = true };
-            BuildSyncPage(syncPage);
-            tabs.TabPages.Add(syncPage);
-
-            // Dock order: Fill first, then Bottom controls top-to-bottom.
+            // Dock order: Fill first, then Bottom controls from top to bottom.
             Controls.Add(tabs);
-            Controls.Add(buttons);
-            Controls.Add(_status);
+            Controls.Add(activity);
             Controls.Add(_output);
-
-            var tips = new ToolTip();
-            tips.SetToolTip(_rbPath, "Leave empty if this exe is in the RetroBat folder.");
-            tips.SetToolTip(_ssid, "Case-insensitive. Matches if the connected Wi-Fi name contains this text.");
-            tips.SetToolTip(_drives, "Comma-separated, e.g.  G:\\, H:\\");
-            tips.SetToolTip(_link, "RetroBat reads 'roms'. It becomes a link to the chosen folder.");
-            tips.SetToolTip(_defaultFolder, "Your original roms folder is renamed to this on the first real run.");
-
-            LoadConfig();
-
-            foreach (var c in new Control[] { _rbPath, _exe, _args, _link, _ssid, _drives, _wifiFolder, _dockFolder, _defaultFolder })
-                c.TextChanged += (s, e) => _dirty = true;
-            _wifiOn.CheckedChanged += (s, e) => { _dirty = true; UpdateEnabled(); };
-            _dockOn.CheckedChanged += (s, e) => { _dirty = true; UpdateEnabled(); };
-            _rbPath.Leave += (s, e) => RefreshFolderLists();
-
-            _libList.SelectedIndexChanged += (s, e) => { if (_loadingLib) return; CommitLib(); SelectLib(_libList.SelectedIndex); };
-            _libOutput.TextChanged += (s, e) => LibEdited();
-            _libEnabled.CheckedChanged += (s, e) => LibEdited();
-            _libOutput.Leave += (s, e) => RefreshFolderLists();
-            _skipPrefix.TextChanged += (s, e) => _dirty = true;
-            _linkType.SelectedIndexChanged += (s, e) => _dirty = true;
-            _buildOnLaunch.CheckedChanged += (s, e) => _dirty = true;
-            _mediaOn.CheckedChanged += (s, e) => { _dirty = true; UpdateMediaExample(); };
-            _mediaFolder.TextChanged += (s, e) => { _dirty = true; UpdateMediaExample(); };
-            _mediaName.TextChanged += (s, e) => { _dirty = true; UpdateMediaExample(); };
-            _srcList.DoubleClick += (s, e) => EditSource();
-
-            FormClosing += OnClosingAsk;
-            Shown += (s, e) => { _dirty = false; RefreshNow(); };
-            Load += (s, e) => FitToScreen();
-            Resize += (s, e) => SizeLogBox();
-            KeyDown += (s, e) =>
-            {
-                if (e.Control && e.KeyCode == Keys.S) { Save(true); e.SuppressKeyPress = true; }
-            };
+            Controls.Add(bar);
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("Copy all", null, (s, e) => { if (_output.TextLength > 0) Clipboard.SetText(_output.Text); });
@@ -170,14 +86,92 @@ namespace RetroBatFolderSwitcher
             menu.Items.Add("Open log file", null, (s, e) => ShowLog());
             _output.ContextMenuStrip = menu;
 
+            LoadConfig();
+            TrackChanges(this);
+
+            _dockOn.CheckedChanged += (s, e) => UpdateEnabled();
+            _wifiOn.CheckedChanged += (s, e) => UpdateEnabled();
+            _rbPath.Leave += (s, e) => RefreshFolderLists();
+            _flushTimer.Tick += (s, e) => FlushTaskLines();
+            _flushTimer.Start();
+
+            KeyDown += (s, e) => { if (e.Control && e.KeyCode == Keys.S) { Save(true); e.SuppressKeyPress = true; } };
+            FormClosing += OnClosingAsk;
+            Load += (s, e) => FitToScreen();
+            Resize += (s, e) => SizeLogBox();
+            Shown += (s, e) => RefreshNow();
+
             ResumeLayout(false);
             PerformLayout();
         }
 
-        // ---------- Config <-> UI ----------
+        // =====================================================================
+        // Launch tab
+        // =====================================================================
+
+        private Control BuildLaunchTab()
+        {
+            // Rules
+            var r = Grid();
+            AddFull(r, _dockOn);
+            AddRow(r, Indent(Lbl("Drives connected")), _drives, Btn("Check", CheckDrives));
+            AddRow(r, Indent(Lbl("Roms folder")), _dockFolder, Btn("Open", () => OpenFolder(_dockFolder.Text)));
+            AddFull(r, Gap(4));
+            AddFull(r, _wifiOn);
+            AddRow(r, Indent(Lbl("Wi-Fi name contains")), _ssid, Btn("Detect", UseCurrentWifi));
+            AddRow(r, Indent(Lbl("Roms folder")), _wifiFolder, Btn("Open", () => OpenFolder(_wifiFolder.Text)));
+            AddFull(r, Gap(4));
+            AddFull(r, RuleTitle("3.  Anywhere else"));
+            AddRow(r, Indent(Lbl("Roms folder")), _defaultFolder, Btn("Open", () => OpenFolder(_defaultFolder.Text)));
+            AddFull(r, Line());
+            AddRow(r, Lbl("Right now"), _now, Btn("Refresh", RefreshNow));
+            var rules = Group("Which roms folder RetroBat uses", r, "Checked from top to bottom. The first rule that matches wins.");
+
+            // Before launching
+            var flow = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Dock = DockStyle.Top, Margin = new Padding(0) };
+            flow.Controls.Add(_libsOnLaunch);
+            flow.Controls.Add(_mediaOnLaunch);
+            var before = Group("Before launching", flow);
+            _tips.SetToolTip(_libsOnLaunch, "Adds library links for systems that are new since last time (Libraries tab).");
+            _tips.SetToolTip(_mediaOnLaunch, "Adds media links for systems that are new since last time (Media links tab).");
+
+            // RetroBat
+            var g = Grid();
+            AddRow(g, Lbl("RetroBat folder"), _rbPath, Btn("Browse...", BrowseRetroBat));
+            var line = new TableLayoutPanel { ColumnCount = 5, RowCount = 1, AutoSize = true, Margin = new Padding(0) };
+            line.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
+            line.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            line.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            line.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            line.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
+            _exe.Dock = _args.Dock = _link.Dock = DockStyle.Fill;
+            line.Controls.Add(_exe, 0, 0);
+            line.Controls.Add(Lbl("Arguments"), 1, 0);
+            line.Controls.Add(_args, 2, 0);
+            line.Controls.Add(Lbl("Linked folder"), 3, 0);
+            line.Controls.Add(_link, 4, 0);
+            AddRow(g, Lbl("Program"), line);
+            var acts = ButtonRow(Btn("Test (dry run)", TestDryRun), Btn("Create desktop shortcuts", CreateShortcuts));
+            AddFull(g, acts);
+            var retrobat = Group("RetroBat", g, "Leave the folder empty if this app is in the RetroBat folder.");
+
+            _tips.SetToolTip(_drives, "All of these must be connected, e.g.  G:\\, H:\\");
+            _tips.SetToolTip(_ssid, "Matches when the connected Wi-Fi name contains this text (not case-sensitive).");
+            _tips.SetToolTip(_link, "The folder RetroBat reads (normally 'roms'). It becomes a link to the chosen roms folder.");
+            _tips.SetToolTip(_defaultFolder, "On the first run your original roms folder is renamed to this.");
+            foreach (var cb in new[] { _dockFolder, _wifiFolder, _defaultFolder })
+                _tips.SetToolTip(cb, "A folder name inside the RetroBat folder, or a full path (e.g. a library).");
+
+            var panel = new Panel { AutoScroll = true };
+            panel.Controls.Add(retrobat);   // Top-docked: added bottom-to-top
+            panel.Controls.Add(before);
+            panel.Controls.Add(rules);
+            return panel;
+        }
 
         private void LoadConfig()
         {
+            _loading = true;
             Config c;
             try { c = ConfigStore.Load(Program.ConfigPath, Out); }
             catch (Exception ex)
@@ -185,91 +179,81 @@ namespace RetroBatFolderSwitcher
                 Out("Could not read " + Program.ConfigFileName + ": " + ex.Message + " - showing defaults.");
                 c = new Config();
             }
+
+            _dockOn.Checked = c.DockedRuleEnabled;
+            _drives.Text = string.Join(", ", c.DockedDrives ?? new List<string>());
+            _wifiOn.Checked = c.WifiRuleEnabled;
+            _ssid.Text = c.WifiSsidContains;
+            _libsOnLaunch.Checked = c.BuildLibrariesOnLaunch;
+            _mediaOnLaunch.Checked = c.MediaLinksOnLaunch;
             _rbPath.Text = c.RetroBatPath;
             _exe.Text = c.RetroBatExe;
             _args.Text = c.LaunchArguments;
             _link.Text = c.LinkName;
-            _wifiOn.Checked = c.WifiRuleEnabled;
-            _ssid.Text = c.WifiSsidContains;
-            _dockOn.Checked = c.DockedRuleEnabled;
-            _drives.Text = string.Join(", ", c.DockedDrives ?? new List<string>());
+
+            LoadLinks(c);
+            LoadSync(c);
+
             RefreshFolderLists();
-            _wifiFolder.Text = c.WifiFolder;
             _dockFolder.Text = c.DockedFolder;
+            _wifiFolder.Text = c.WifiFolder;
             _defaultFolder.Text = c.DefaultFolder;
             UpdateEnabled();
-
-            _libs = (c.Libraries ?? new List<LibraryGroup>()).Select(l => l.Clone()).ToList();
-            _skipPrefix.Text = c.SkipPrefix ?? "";
-            _linkType.SelectedItem = new[] { "Auto", "Symlink", "Junction" }
-                .FirstOrDefault(t => t.Equals(c.LinkType ?? "", StringComparison.OrdinalIgnoreCase)) ?? "Auto";
-            _buildOnLaunch.Checked = c.BuildLibrariesOnLaunch;
-            _mediaOn.Checked = c.MediaLinksEnabled;
-            _mediaFolder.Text = c.MediaFolder ?? "";
-            _mediaName.Text = c.MediaLinkName ?? "media";
-            _mediaRoms.Items.Clear();
-            foreach (var r in c.MediaRomFolders ?? new List<string>()) _mediaRoms.Items.Add(r);
-            UpdateMediaExample();
-            LoadSync(c);
-            RefreshLibList(_libs.Count > 0 ? 0 : -1);
-            RefreshFolderLists();
+            _loading = false;
+            _dirty = false;
         }
 
         private Config FromUi()
         {
             CommitLib();
-            var cfgOut = new Config
+            var c = new Config
             {
-            Libraries = _libs.Select(l => l.Clone()).ToList(),
-            SkipPrefix = _skipPrefix.Text.Trim(),
-            LinkType = (_linkType.SelectedItem as string) ?? "Auto",
-            BuildLibrariesOnLaunch = _buildOnLaunch.Checked,
-            MediaLinksEnabled = _mediaOn.Checked,
-            MediaFolder = _mediaFolder.Text.Trim(),
-            MediaLinkName = Or(_mediaName.Text, "media"),
-            MediaRomFolders = _mediaRoms.Items.Cast<string>().ToList(),
-            RetroBatPath = _rbPath.Text.Trim(),
-            RetroBatExe = Or(_exe.Text, "retrobat.exe"),
-            LaunchArguments = _args.Text.Trim(),
-            LinkName = Or(_link.Text, "roms"),
-            WifiRuleEnabled = _wifiOn.Checked,
-            WifiSsidContains = _ssid.Text.Trim(),
-            WifiFolder = Or(_wifiFolder.Text, "roms-local"),
-            DockedRuleEnabled = _dockOn.Checked,
-            DockedDrives = _drives.Text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                                       .Select(Switcher.NormalizeDrive).Distinct().ToList(),
-            DockedFolder = Or(_dockFolder.Text, "roms-docked"),
-            DefaultFolder = Or(_defaultFolder.Text, "roms-default"),
+                RetroBatPath = _rbPath.Text.Trim(),
+                RetroBatExe = Or(_exe.Text, "retrobat.exe"),
+                LaunchArguments = _args.Text.Trim(),
+                LinkName = Or(_link.Text, "roms"),
+                DockedRuleEnabled = _dockOn.Checked,
+                DockedDrives = _drives.Text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                                           .Select(Switcher.NormalizeDrive).Distinct().ToList(),
+                DockedFolder = Or(_dockFolder.Text, "roms-docked"),
+                WifiRuleEnabled = _wifiOn.Checked,
+                WifiSsidContains = _ssid.Text.Trim(),
+                WifiFolder = Or(_wifiFolder.Text, "roms-local"),
+                DefaultFolder = Or(_defaultFolder.Text, "roms-default"),
+                BuildLibrariesOnLaunch = _libsOnLaunch.Checked,
+                MediaLinksOnLaunch = _mediaOnLaunch.Checked,
             };
-            ApplySync(cfgOut);
-            return cfgOut;
+            ApplyLinks(c);
+            ApplySync(c);
+            return c;
         }
 
         private bool CheckConfig(Config c)
         {
-            var problems = new List<string>();
+            var errors = new List<string>();
+            var warnings = new List<string>();
             string rb = RbDir(c);
-            if (!Directory.Exists(rb)) problems.Add("RetroBat folder not found: " + rb);
-            else if (!File.Exists(Path.Combine(rb, c.RetroBatExe))) problems.Add(c.RetroBatExe + " not found in " + rb);
+            if (!Directory.Exists(rb)) warnings.Add("RetroBat folder not found: " + rb);
+            else if (!File.Exists(Path.Combine(rb, c.RetroBatExe))) warnings.Add(c.RetroBatExe + " not found in " + rb);
 
             var names = new[] { c.WifiFolder, c.DockedFolder, c.DefaultFolder }
                 .Concat(c.Libraries.Select(l => l.Output ?? "")).ToList();
             if (names.Any(n => n.IndexOfAny(Path.GetInvalidPathChars()) >= 0 || n.IndexOfAny(new[] { '*', '?', '"', '<', '>', '|' }) >= 0))
-                problems.Add("Folder names can't contain * ? \" < > |");
+                errors.Add("Folder names can't contain * ? \" < > |");
             else
             {
                 string linkFull = Path.Combine(rb, c.LinkName);
                 if (names.Where(n => n.Length > 0).Any(n => { try { return PathsEqual(Path.Combine(rb, n), linkFull); } catch { return false; } }))
-                    problems.Add("No rule or library folder can be '" + linkFull + "' - that becomes the link.");
+                    errors.Add("No roms or library folder can be '" + linkFull + "' - that becomes the link.");
             }
 
-            if (problems.Count == 0) return true;
-            if (problems.Any(p => p.StartsWith("No rule") || p.StartsWith("Folder names")))
+            if (errors.Count > 0)
             {
-                MessageBox.Show(this, string.Join("\n", problems), Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, string.Join("\n", errors), Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
-            return MessageBox.Show(this, string.Join("\n", problems) + "\n\nSave anyway?", Text,
+            if (warnings.Count == 0) return true;
+            return MessageBox.Show(this, string.Join("\n", warnings) + "\n\nSave anyway?", Text,
                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
         }
 
@@ -281,6 +265,7 @@ namespace RetroBatFolderSwitcher
             {
                 ConfigStore.Save(Program.ConfigPath, c);
                 _dirty = false;
+                _status.Text = "Settings saved.";
                 if (announce) Out("Saved " + Program.ConfigPath);
                 return true;
             }
@@ -291,12 +276,10 @@ namespace RetroBatFolderSwitcher
             }
         }
 
-        // ---------- Actions ----------
-
         private void TestDryRun()
         {
             var c = FromUi();
-            Out("---- dry run (unsaved settings) ----");
+            Out("---- launch test (dry run, unsaved settings are used) ----");
             try { new Switcher(Out).Apply(c, RbDir(c), dryRun: true); }
             catch (Exception ex) { Out("ERROR: " + ex.Message); }
         }
@@ -312,14 +295,14 @@ namespace RetroBatFolderSwitcher
 
             if (Switcher.IsRetroBatRunning())
             {
-                Out("RetroBat is already running - close it first so the folder can be switched.");
+                Out("RetroBat is already running - close it first so the roms folder can be switched.");
                 return;
             }
             try { sw.Apply(c, rb, dryRun: false); }
             catch (Exception ex)
             {
                 Out("ERROR: " + ex.Message);
-                MessageBox.Show(this, ex.Message, "Couldn't switch folder", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, ex.Message, "Couldn't switch the roms folder", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
             if (sw.Launch(rb, c)) Close();
@@ -328,11 +311,10 @@ namespace RetroBatFolderSwitcher
         private void RefreshNow()
         {
             var c = FromUi();
-            var quiet = new List<string>();
-            string folder = new Switcher(quiet.Add).ChooseFolder(c, out string reason);
-            _now.Text = reason + "  →  " + folder;
-            _now.ForeColor = SystemColors.ControlText;
-            foreach (var l in quiet) Out(l);
+            var lines = new List<string>();
+            string folder = new Switcher(lines.Add).ChooseFolder(c, out string reason);
+            _now.Text = reason + "   →   " + folder;
+            _tips.SetToolTip(_now, string.Join("\n", lines));
         }
 
         private void UseCurrentWifi()
@@ -356,10 +338,9 @@ namespace RetroBatFolderSwitcher
         {
             var c = FromUi();
             if (c.DockedDrives.Count == 0) { Out("No drives listed."); return; }
-            Out("Drives: " + string.Join(", ", c.DockedDrives.Select(d => d + (Switcher.DriveReady(d) ? " ready" : " missing"))));
-            var ready = DriveInfo.GetDrives().Where(d => { try { return d.IsReady; } catch { return false; } })
-                                 .Select(d => d.Name);
-            Out("All ready drives on this PC: " + string.Join(", ", ready));
+            Out("Drives: " + string.Join(", ", c.DockedDrives.Select(d => d + (Switcher.DriveReady(d) ? " connected" : " missing"))));
+            var ready = DriveInfo.GetDrives().Where(d => { try { return d.IsReady; } catch { return false; } }).Select(d => d.Name);
+            Out("All connected drives: " + string.Join(", ", ready));
             RefreshNow();
         }
 
@@ -375,9 +356,10 @@ namespace RetroBatFolderSwitcher
             }
         }
 
-        private void OpenSub(string name)
+        private void OpenFolder(string name)
         {
-            string p = Path.Combine(RbDir(FromUi()), name ?? "");
+            if (string.IsNullOrWhiteSpace(name)) return;
+            string p = Path.Combine(RbDir(FromUi()), name.Trim());
             if (!Directory.Exists(p))
             {
                 if (MessageBox.Show(this, "'" + p + "' doesn't exist. Create it?", Text,
@@ -391,7 +373,7 @@ namespace RetroBatFolderSwitcher
         private void ShowLog()
         {
             if (File.Exists(Program.LogPath)) Process.Start("notepad.exe", "\"" + Program.LogPath + "\"");
-            else Out("No log yet: " + Program.LogPath);
+            else Out("No log file yet: " + Program.LogPath);
         }
 
         private void CreateShortcuts()
@@ -400,11 +382,12 @@ namespace RetroBatFolderSwitcher
             {
                 string exe = Assembly.GetExecutingAssembly().Location;
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                string rbExe = Path.Combine(RbDir(FromUi()), FromUi().RetroBatExe);
+                var c = FromUi();
+                string rbExe = Path.Combine(RbDir(c), c.RetroBatExe);
                 string icon = File.Exists(rbExe) ? rbExe : exe;
-                MakeShortcut(Path.Combine(desktop, "RetroBat (Folder Switcher).lnk"), exe, "", icon, "Pick ROM folder, then start RetroBat");
+                MakeShortcut(Path.Combine(desktop, "RetroBat (Folder Switcher).lnk"), exe, "", icon, "Pick the roms folder, then start RetroBat");
                 MakeShortcut(Path.Combine(desktop, "RetroBat Folder Switcher Settings.lnk"), exe, "--settings", exe, "RetroBat Folder Switcher settings");
-                Out("Created desktop shortcuts: 'RetroBat (Folder Switcher)' and 'RetroBat Folder Switcher Settings'.");
+                Out("Created desktop shortcuts 'RetroBat (Folder Switcher)' and 'RetroBat Folder Switcher Settings'.");
             }
             catch (Exception ex) { Out("Could not create shortcuts: " + ex.Message); }
         }
@@ -423,360 +406,327 @@ namespace RetroBatFolderSwitcher
             t.InvokeMember("Save", BindingFlags.InvokeMethod, null, sc, null);
         }
 
+        /// <summary>Fills the roms folder dropdowns with rom* folders in the RetroBat folder and the library folders.</summary>
+        private void RefreshFolderLists()
+        {
+            var c = FromUi();
+            string rb = RbDir(c);
+            var names = new List<string>();
+            try
+            {
+                if (Directory.Exists(rb))
+                    names = Directory.GetDirectories(rb).Select(Path.GetFileName)
+                        .Where(n => n.StartsWith("rom", StringComparison.OrdinalIgnoreCase) &&
+                                    !n.Equals(c.LinkName, StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(n => n).ToList();
+            }
+            catch { }
+            foreach (var l in c.Libraries)
+                if (!string.IsNullOrWhiteSpace(l.Output) && !names.Contains(l.Output.Trim(), StringComparer.OrdinalIgnoreCase))
+                    names.Add(l.Output.Trim());
+
+            bool was = _loading;
+            _loading = true;
+            foreach (var cb in new[] { _dockFolder, _wifiFolder, _defaultFolder })
+            {
+                string keep = cb.Text;
+                cb.Items.Clear();
+                cb.Items.AddRange(names.Cast<object>().ToArray());
+                cb.Text = keep;
+            }
+            _loading = was;
+        }
+
+        private void UpdateEnabled()
+        {
+            _drives.Enabled = _dockFolder.Enabled = _dockOn.Checked;
+            _ssid.Enabled = _wifiFolder.Enabled = _wifiOn.Checked;
+        }
+
         private void OnClosingAsk(object sender, FormClosingEventArgs e)
         {
+            if (_busy)
+            {
+                if (MessageBox.Show(this, "A task is still running. Stop it and close?", Text,
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) { e.Cancel = true; return; }
+                _stopRequested = true;
+                for (int i = 0; i < 50 && _busy; i++) { Thread.Sleep(100); Application.DoEvents(); }
+            }
             if (!_dirty) return;
             var r = MessageBox.Show(this, "Save changes before closing?", Text, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             if (r == DialogResult.Cancel) e.Cancel = true;
             else if (r == DialogResult.Yes && !Save(false)) e.Cancel = true;
         }
 
-        // ---------- Libraries tab ----------
+        // =====================================================================
+        // Activity area, button bar, background tasks
+        // =====================================================================
 
-        private void BuildLibrariesPage(TabPage page)
+        private Control BuildActivityHeader()
         {
-            var intro = new Label
+            var t = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 4, Padding = new Padding(2, 6, 2, 2) };
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            var title = new Label { Text = "Activity", AutoSize = true, Font = new Font(Font, FontStyle.Bold), Anchor = AnchorStyles.Left, Margin = new Padding(3, 6, 10, 3) };
+            _stopBtn = Btn("Stop", () => { _stopRequested = true; _status.Text = "Stopping..."; });
+            _stopBtn.Visible = false;
+            var openLog = new LinkLabel { Text = "Open log file", AutoSize = true, Anchor = AnchorStyles.Right, Margin = new Padding(10, 6, 3, 3) };
+            openLog.LinkClicked += (s, e) => ShowLog();
+            t.Controls.Add(title, 0, 0);
+            t.Controls.Add(_status, 1, 0);
+            t.Controls.Add(_stopBtn, 2, 0);
+            t.Controls.Add(openLog, 3, 0);
+            _tips.SetToolTip(_output, "Right-click to copy or clear.");
+            return t;
+        }
+
+        private Control BuildButtonBar()
+        {
+            var bar = new FlowLayoutPanel
             {
-                Dock = DockStyle.Top, AutoSize = false, Height = 38,
-                Text = "Each library is a folder filled with links to the system folders (nes, snes, ...) found in its sources. " +
-                       "Point the switching rules at these folders. Building never deletes real folders or files."
+                Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.RightToLeft,
+                Padding = new Padding(0, 8, 0, 2), WrapContents = false
             };
-
-            // Library list
-            var libGrid = ListWithButtons(_libList,
-                Btn("Add", AddLib), Btn("Remove", RemoveLib), Btn("Up", () => MoveLib(-1)), Btn("Down", () => MoveLib(1)));
-            var libsGroup = Group("Libraries", libGrid);
-
-            // Editor
-            var ed = Grid();
-            AddRow(ed, Lbl("Output folder"), _libOutput, Btn("Browse...", BrowseLibOutput));
-            AddRow(ed, Lbl(""), _libEnabled);
-            AddRow(ed, Lbl("Sources"), new Label { Text = "Checked in order. If two sources have the same system, the first one wins.", AutoSize = true, ForeColor = SystemColors.GrayText });
-            var srcGrid = ListWithButtons(_srcList,
-                Btn("Add folder...", AddSourceFolder), Btn("Add path...", AddSourcePath), Btn("Edit...", EditSource),
-                Btn("Remove", RemoveSource), Btn("Up", () => MoveSource(-1)), Btn("Down", () => MoveSource(1)));
-            ed.Controls.Add(srcGrid, 0, ed.RowCount);
-            ed.SetColumnSpan(srcGrid, 3);
-            ed.RowCount++;
-            ed.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var editGroup = Group("Selected library", ed);
-            _libEditor.AddRange(new Control[] { _libOutput, _libEnabled, srcGrid });
-
-            // Options + actions
-            _linkType.Items.AddRange(new object[] { "Auto", "Symlink", "Junction" });
-            var opt = Grid();
-            var skipRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
-            skipRow.Controls.Add(_skipPrefix);
-            skipRow.Controls.Add(new Label { Text = "e.g. _ skips _media. Empty = link everything.", AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(8, 7, 3, 3) });
-            AddRow(opt, Lbl("Skip folders starting with"), skipRow);
-            var typeRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
-            typeRow.Controls.Add(_linkType);
-            typeRow.Controls.Add(new Label { Text = "Auto = symlink if allowed, otherwise junction (local drives only)", AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(8, 7, 3, 3) });
-            AddRow(opt, Lbl("Link type"), typeRow);
-            AddRow(opt, Lbl(""), _buildOnLaunch);
-            var actions = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 4, 0, 0), WrapContents = true };
-            actions.Controls.Add(Busy(Btn("Preview (dry run)", () => RunBuild(all: true, rebuild: false, dryRun: true))));
-            actions.Controls.Add(Busy(Btn("Build selected", () => RunBuild(all: false, rebuild: false, dryRun: false))));
-            actions.Controls.Add(Busy(Btn("Build all", () => RunBuild(all: true, rebuild: false, dryRun: false), bold: true)));
-            actions.Controls.Add(Busy(Btn("Rebuild all...", () => RunBuild(all: true, rebuild: true, dryRun: false))));
-            opt.Controls.Add(actions, 0, opt.RowCount);
-            opt.SetColumnSpan(actions, 3);
-            opt.RowCount++;
-            opt.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            var optGroup = Group("Build", opt);
-
-            page.Controls.Add(optGroup);   // Top-docked: added bottom-to-top
-            page.Controls.Add(editGroup);
-            page.Controls.Add(libsGroup);
-            page.Controls.Add(intro);
-
-            var tips = new ToolTip();
-            tips.SetToolTip(_libOutput, "This folder is filled with one link per system. Use it as a rule folder on the first tab.");
-            tips.SetToolTip(_srcList, "Double-click to edit. Folders that don't exist (e.g. an unplugged drive) are skipped.");
-            tips.SetToolTip(_linkType, "Symlinks need Windows Developer Mode or running as administrator. Junctions can't point to network drives.");
+            var close = Btn("Close", Close);
+            var launch = Busy(Btn("Save && launch RetroBat", SaveAndLaunch, bold: true));
+            var save = Btn("Save", () => Save(true));
+            bar.Controls.Add(close);
+            bar.Controls.Add(launch);
+            bar.Controls.Add(save);
+            AcceptButton = null;
+            CancelButton = null;
+            _tips.SetToolTip(save, "Ctrl+S");
+            return bar;
         }
 
-        private void RefreshLibList(int select)
+        /// <summary>
+        /// Runs work on a background thread. work(log, stopRequested) returns the final status text.
+        /// Output goes to the Activity log (batched) and, when logToFile, to the log file.
+        /// </summary>
+        private void RunTask(string status, bool logToFile, Func<Action<string>, Func<bool>, string> work, Action after = null)
         {
-            _loadingLib = true;
-            _libList.Items.Clear();
-            foreach (var l in _libs) _libList.Items.Add(l.ToString());
-            if (select >= _libs.Count) select = _libs.Count - 1;
-            _libList.SelectedIndex = select;
-            _loadingLib = false;
-            SelectLib(select);
-        }
-
-        private void SelectLib(int i)
-        {
-            _loadingLib = true;
-            _libIdx = i;
-            bool has = i >= 0 && i < _libs.Count;
-            foreach (var c in _libEditor) c.Enabled = has;
-            _libOutput.Text = has ? _libs[i].Output : "";
-            _libEnabled.Checked = has && _libs[i].Enabled;
-            _srcList.Items.Clear();
-            if (has) foreach (var src in _libs[i].Sources ?? new List<string>()) _srcList.Items.Add(src);
-            _loadingLib = false;
-        }
-
-        private void CommitLib()
-        {
-            if (_loadingLib || _libIdx < 0 || _libIdx >= _libs.Count) return;
-            var g = _libs[_libIdx];
-            g.Output = _libOutput.Text.Trim();
-            g.Enabled = _libEnabled.Checked;
-            g.Sources = _srcList.Items.Cast<string>().ToList();
-        }
-
-        private void LibEdited()
-        {
-            if (_loadingLib) return;
-            _dirty = true;
-            CommitLib();
-            if (_libIdx >= 0 && _libIdx < _libList.Items.Count)
+            if (_busy) { Out("Busy - wait for the current task or press Stop."); return; }
+            SetBusy(true);
+            _stopRequested = false;
+            _status.Text = status;
+            if (logToFile)
             {
-                _loadingLib = true;
-                _libList.Items[_libIdx] = _libs[_libIdx].ToString();
-                _loadingLib = false;
-            }
-        }
-
-        private void AddLib()
-        {
-            CommitLib();
-            _libs.Add(new LibraryGroup());
-            _dirty = true;
-            RefreshLibList(_libs.Count - 1);
-            _libOutput.Focus();
-        }
-
-        private void RemoveLib()
-        {
-            if (_libIdx < 0) return;
-            if (MessageBox.Show(this, "Remove this library from the list?\n\n" + _libs[_libIdx] +
-                    "\n\nNothing on disk is deleted.", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            _libs.RemoveAt(_libIdx);
-            _dirty = true;
-            RefreshLibList(Math.Min(_libIdx, _libs.Count - 1));
-        }
-
-        private void MoveLib(int d)
-        {
-            CommitLib();
-            int i = _libIdx, j = i + d;
-            if (i < 0 || j < 0 || j >= _libs.Count) return;
-            var t = _libs[i]; _libs[i] = _libs[j]; _libs[j] = t;
-            _dirty = true;
-            RefreshLibList(j);
-        }
-
-        private void BrowseLibOutput()
-        {
-            using (var dlg = new FolderBrowserDialog { Description = "Select (or create) the folder this library is built in", ShowNewFolderButton = true })
-            {
-                if (Directory.Exists(_libOutput.Text)) dlg.SelectedPath = _libOutput.Text;
-                if (dlg.ShowDialog(this) == DialogResult.OK) { _libOutput.Text = dlg.SelectedPath; RefreshFolderLists(); }
-            }
-        }
-
-        private void AddSourceFolder()
-        {
-            using (var dlg = new FolderBrowserDialog { Description = "Select a source folder that contains system folders (nes, snes, ...)" })
-            {
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                AddSource(dlg.SelectedPath);
-            }
-        }
-
-        private void AddSourcePath()
-        {
-            string p = Prompt("Add source", "Folder path (can be a drive that isn't connected right now, e.g. X:\\roms):", "");
-            if (!string.IsNullOrWhiteSpace(p)) AddSource(p.Trim());
-        }
-
-        private void AddSource(string path)
-        {
-            if (_srcList.Items.Cast<string>().Any(x => x.Equals(path, StringComparison.OrdinalIgnoreCase))) return;
-            _srcList.Items.Add(path);
-            _srcList.SelectedIndex = _srcList.Items.Count - 1;
-            LibEdited();
-        }
-
-        private void EditSource()
-        {
-            int i = _srcList.SelectedIndex;
-            if (i < 0) return;
-            string p = Prompt("Edit source", "Folder path:", (string)_srcList.Items[i]);
-            if (string.IsNullOrWhiteSpace(p)) return;
-            _srcList.Items[i] = p.Trim();
-            LibEdited();
-        }
-
-        private void RemoveSource()
-        {
-            int i = _srcList.SelectedIndex;
-            if (i < 0) return;
-            _srcList.Items.RemoveAt(i);
-            if (_srcList.Items.Count > 0) _srcList.SelectedIndex = Math.Min(i, _srcList.Items.Count - 1);
-            LibEdited();
-        }
-
-        private void MoveSource(int d)
-        {
-            int i = _srcList.SelectedIndex, j = i + d;
-            if (i < 0 || j < 0 || j >= _srcList.Items.Count) return;
-            object t = _srcList.Items[i];
-            _srcList.Items.RemoveAt(i);
-            _srcList.Items.Insert(j, t);
-            _srcList.SelectedIndex = j;
-            LibEdited();
-        }
-
-        private void RunBuild(bool all, bool rebuild, bool dryRun)
-        {
-            var c = FromUi();
-            if (!all && (_libIdx < 0 || _libIdx >= c.Libraries.Count)) { Out("Select a library first."); return; }
-
-            if (rebuild)
-            {
-                if (Switcher.IsRetroBatRunning()) { Out("Close RetroBat before rebuilding libraries."); return; }
-                if (MessageBox.Show(this,
-                        "Rebuild removes every link in each enabled library's output folder and creates them again " +
-                        "from the sources, in the current order.\n\nReal folders and files are never touched.\n\nContinue?",
-                        Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                Program.TrimLogPublic();
+                try { _taskLog = new StreamWriter(Program.LogPath, append: true, encoding: new UTF8Encoding(false)); }
+                catch { _taskLog = null; }
             }
 
-            int idx = _libIdx;
-            RunTask(dryRun ? "Previewing libraries..." : rebuild ? "Rebuilding libraries..." : "Building libraries...",
-                logToFile: !dryRun, work: (log, stop) =>
+            Func<bool> stop = () => _stopRequested;
+            var t = new Thread(() =>
             {
-                log("---- libraries " + (dryRun ? "preview" : rebuild ? "rebuild" : "build") + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-                var b = new LibraryBuilder(log) { Stop = stop };
-                if (all) b.BuildLibraries(c, rebuild, dryRun);
-                else b.Build(c, c.Libraries[idx], rebuild, dryRun);
-                if (b.Failed > 0 && !dryRun)
-                    log("Some links failed. For network sources or Link type 'Symlink', turn on Developer Mode " +
-                        "(Settings > System > For developers) or run this as administrator.");
-                return stop() ? "Stopped." : b.Failed > 0 ? b.Failed + " link(s) failed - see the log."
-                     : (dryRun ? "Preview finished: " : "Done: ") + b.Created + " link(s) " + (dryRun ? "would be " : "") + "created.";
-            }, after: RefreshFolderLists);
+                string result = "Finished.";
+                try { result = work(TaskLine, stop) ?? result; }
+                catch (Exception ex) { TaskLine("ERROR: " + ex.Message); result = "Failed - see the log."; }
+                finally
+                {
+                    lock (_taskLogLock) { try { _taskLog?.Dispose(); } catch { } _taskLog = null; }
+                    try
+                    {
+                        BeginInvoke((Action)(() =>
+                        {
+                            FlushTaskLines();
+                            SetBusy(false);
+                            _status.Text = result;
+                            after?.Invoke();
+                        }));
+                    }
+                    catch { }
+                }
+            }) { IsBackground = true, Name = "task" };
+            t.Start();
         }
 
-        // ---------- Media tab ----------
-
-        private void BuildMediaPage(TabPage page)
+        private void TaskLine(string line)
         {
-            var intro = new Label
-            {
-                Dock = DockStyle.Top, AutoSize = false, Height = 52,
-                Text = "For every system folder in the rom folders below, adds a 'media' link pointing at the same system's " +
-                       "media in your media folder - e.g. for roms copied with  robocopy ... /XD media. " +
-                       "Systems without media are skipped, and an existing real media folder is never touched."
-            };
-
-            var g = Grid();
-            AddRow(g, Lbl(""), _mediaOn);
-            AddRow(g, Lbl("Media folder"), _mediaFolder, Btn("Browse...", BrowseMediaFolder));
-            AddRow(g, Lbl(""), new Label { Text = "Contains one folder per system, each with a media folder inside (a copy of MEDIA_FULL).", AutoSize = true, ForeColor = SystemColors.GrayText });
-            var nameRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
-            nameRow.Controls.Add(_mediaName);
-            nameRow.Controls.Add(new Label { Text = "name of the link, and of the folder inside each system's media folder", AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(8, 7, 3, 3) });
-            AddRow(g, Lbl("Link name"), nameRow);
-            AddRow(g, Lbl("Rom folders"), new Label { Text = "Each system folder in these gets a media link.", AutoSize = true, ForeColor = SystemColors.GrayText });
-            var romsGrid = ListWithButtons(_mediaRoms,
-                Btn("Add folder...", AddMediaRomFolder), Btn("Add path...", AddMediaRomPath), Btn("Remove", RemoveMediaRom));
-            g.Controls.Add(romsGrid, 0, g.RowCount);
-            g.SetColumnSpan(romsGrid, 3);
-            g.RowCount++;
-            g.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            AddRow(g, Lbl("Example"), _mediaExample);
-
-            var actions = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 4, 0, 0), WrapContents = true };
-            actions.Controls.Add(Busy(Btn("Preview (dry run)", () => RunMedia(rebuild: false, dryRun: true))));
-            actions.Controls.Add(Busy(Btn("Create media links", () => RunMedia(rebuild: false, dryRun: false), bold: true)));
-            actions.Controls.Add(Busy(Btn("Recreate media links...", () => RunMedia(rebuild: true, dryRun: false))));
-            g.Controls.Add(actions, 0, g.RowCount);
-            g.SetColumnSpan(actions, 3);
-            g.RowCount++;
-            g.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-            page.Controls.Add(Group("Media links", g));   // Top-docked: added bottom-to-top
-            page.Controls.Add(intro);
-
-            var tips = new ToolTip();
-            tips.SetToolTip(_mediaFolder, "e.g. C:\\RetroBat\\Media, where MEDIA_FULL is copied to.");
-            tips.SetToolTip(_mediaRoms, "e.g. E:\\Roms - the robocopy destination that has no media folders.");
+            _taskLines.Enqueue(line);
+            lock (_taskLogLock) { try { _taskLog?.WriteLine(line); } catch { } }
         }
 
-        private void UpdateMediaExample()
+        private void SetStatusAsync(string text)
         {
-            string name = Or(_mediaName.Text, "media");
-            string rom = _mediaRoms.Items.Count > 0 ? (string)_mediaRoms.Items[0] : "<rom folder>";
-            string media = string.IsNullOrWhiteSpace(_mediaFolder.Text) ? "<media folder>" : _mediaFolder.Text.Trim();
-            _mediaExample.Text = Path.Combine(Path.Combine(rom, "nes"), name) + "   →   " + Path.Combine(Path.Combine(media, "nes"), name);
+            try { BeginInvoke((Action)(() => _status.Text = text)); } catch { }
         }
 
-        private void BrowseMediaFolder()
+        private void FlushTaskLines()
         {
-            using (var dlg = new FolderBrowserDialog { Description = "Select the media folder (one folder per system, each with a media folder inside)" })
+            if (_taskLines.IsEmpty) return;
+            var sb = new StringBuilder();
+            while (_taskLines.TryDequeue(out string l))
             {
-                if (Directory.Exists(_mediaFolder.Text)) dlg.SelectedPath = _mediaFolder.Text;
-                if (dlg.ShowDialog(this) == DialogResult.OK) _mediaFolder.Text = dlg.SelectedPath;
+                if (sb.Length > 0) sb.Append("\r\n");
+                sb.Append(l);
             }
+            // Keep the on-screen log manageable; the full output is in the log file.
+            if (_output.TextLength > 2000000)
+                _output.Text = "(earlier output trimmed - see the log file)\r\n" + _output.Text.Substring(_output.TextLength - 500000);
+            Out(sb.ToString());
         }
 
-        private void AddMediaRomFolder()
+        private void SetBusy(bool busy)
         {
-            using (var dlg = new FolderBrowserDialog { Description = "Select a rom folder (contains system folders such as nes, snes, ...)" })
+            _busy = busy;
+            foreach (var b in _busyButtons) b.Enabled = !busy;
+            _stopBtn.Visible = busy;
+            Cursor = busy ? Cursors.AppStarting : Cursors.Default;
+        }
+
+        private void Out(string msg)
+        {
+            if (_output.TextLength > 0) _output.AppendText("\r\n");
+            _output.AppendText(msg);
+            _output.Update();
+        }
+
+        // =====================================================================
+        // Layout helpers
+        // =====================================================================
+
+        private static TabPage Page(string title, Control content)
+        {
+            var p = new TabPage(title) { Padding = new Padding(10), UseVisualStyleBackColor = true };
+            content.Dock = DockStyle.Fill;
+            p.Controls.Add(content);
+            return p;
+        }
+
+        /// <summary>Auto-sized group (stacked from the top) with an optional one-line description.</summary>
+        private static GroupBox Group(string title, Control content, string description = null)
+        {
+            var g = new GroupBox { Text = title, Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(10, 6, 10, 10) };
+            content.Dock = DockStyle.Top;
+            g.Controls.Add(content);
+            if (description != null) g.Controls.Add(Hint(description, DockStyle.Top));
+            return g;
+        }
+
+        /// <summary>Group that fills its cell (for lists that should grow with the window).</summary>
+        private static GroupBox FillGroup(string title, Control content)
+        {
+            var g = new GroupBox { Text = title, Dock = DockStyle.Fill, Padding = new Padding(10, 6, 10, 10) };
+            content.Dock = DockStyle.Fill;
+            g.Controls.Add(content);
+            return g;
+        }
+
+        /// <summary>Vertical stack: rows sized to content except those marked fill.</summary>
+        private static TableLayoutPanel Stack(params Control[] rows) => StackWithFill(rows, new HashSet<Control>());
+
+        private static TableLayoutPanel StackWithFill(Control[] rows, HashSet<Control> fill)
+        {
+            var t = new TableLayoutPanel { ColumnCount = 1, RowCount = rows.Length, Margin = new Padding(0) };
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            int fills = Math.Max(1, rows.Count(fill.Contains));
+            for (int i = 0; i < rows.Length; i++)
             {
-                if (dlg.ShowDialog(this) == DialogResult.OK) AddMediaRom(dlg.SelectedPath);
+                bool f = fill.Contains(rows[i]);
+                t.RowStyles.Add(f ? new RowStyle(SizeType.Percent, 100f / fills) : new RowStyle(SizeType.AutoSize));
+                rows[i].Dock = DockStyle.Fill;
+                t.Controls.Add(rows[i], 0, i);
             }
+            return t;
         }
 
-        private void AddMediaRomPath()
+        private static TableLayoutPanel Grid()
         {
-            string p = Prompt("Add rom folder", "Rom folder path (e.g. E:\\Roms):", "");
-            if (!string.IsNullOrWhiteSpace(p)) AddMediaRom(p.Trim());
+            var t = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 3, Margin = new Padding(0) };
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            return t;
         }
 
-        private void AddMediaRom(string path)
+        private static void AddRow(TableLayoutPanel t, Control label, Control field, Control button = null)
         {
-            if (_mediaRoms.Items.Cast<string>().Any(x => x.Equals(path, StringComparison.OrdinalIgnoreCase))) return;
-            _mediaRoms.Items.Add(path);
-            _dirty = true;
-            UpdateMediaExample();
+            int row = t.RowCount++;
+            t.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            if (field is TextBox || field is ComboBox) field.Dock = DockStyle.Fill;
+            t.Controls.Add(label, 0, row);
+            t.Controls.Add(field, 1, row);
+            if (button != null) t.Controls.Add(button, 2, row);
         }
 
-        private void RemoveMediaRom()
+        private static void AddFull(TableLayoutPanel t, Control c)
         {
-            int i = _mediaRoms.SelectedIndex;
-            if (i < 0) return;
-            _mediaRoms.Items.RemoveAt(i);
-            _dirty = true;
-            UpdateMediaExample();
+            int row = t.RowCount++;
+            t.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            t.Controls.Add(c, 0, row);
+            t.SetColumnSpan(c, t.ColumnCount);
         }
 
-        private void RunMedia(bool rebuild, bool dryRun)
+        private static FlowLayoutPanel ButtonRow(params Control[] items)
         {
-            var c = FromUi();
-            if (rebuild)
+            var f = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0, 4, 0, 0) };
+            f.Controls.AddRange(items);
+            return f;
+        }
+
+        private static Label Lbl(string t) => new Label { Text = t, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 7, 10, 3) };
+
+        private static Control Indent(Label l) { l.Margin = new Padding(24, 7, 10, 3); return l; }
+
+        private static Label Hint(string text, DockStyle dock = DockStyle.None) => new Label
+        {
+            Text = text, AutoSize = true, ForeColor = SystemColors.GrayText, Dock = dock, Margin = new Padding(3, 2, 3, 6), Padding = new Padding(0, 0, 0, 6)
+        };
+
+        private static CheckBox RuleHeader(string text) => new CheckBox
+        {
+            Text = text, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Bold), Margin = new Padding(3, 4, 3, 2)
+        };
+
+        private static Label RuleTitle(string text) => new Label
+        {
+            Text = text, AutoSize = true, Font = new Font("Segoe UI", 9f, FontStyle.Bold), Margin = new Padding(20, 6, 3, 2)
+        };
+
+        private static Control Gap(int h) => new Panel { Height = h, Margin = new Padding(0) };
+
+        private static Control Line() => new Label { Height = 1, Dock = DockStyle.Fill, BorderStyle = BorderStyle.Fixed3D, AutoSize = false, Margin = new Padding(3, 10, 3, 6) };
+
+        private static ComboBox FolderCombo() => new ComboBox { DropDownStyle = ComboBoxStyle.DropDown };
+
+        private static Button Btn(string text, Action onClick, bool bold = false)
+        {
+            var b = new Button { Text = text, AutoSize = true, MinimumSize = new Size(76, 26), Padding = new Padding(6, 1, 6, 1), Margin = new Padding(3) };
+            if (bold) b.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            b.Click += (s, e) => onClick();
+            return b;
+        }
+
+        /// <summary>Narrow button (Up/Down).</summary>
+        private static Button Small(Button b)
+        {
+            b.AutoSize = false;
+            b.MinimumSize = Size.Empty;
+            b.Padding = new Padding(0);
+            b.Size = new Size(Math.Max(48, TextRenderer.MeasureText(b.Text, b.Font).Width + 16), 26);
+            return b;
+        }
+
+        private Button Busy(Button b)
+        {
+            _busyButtons.Add(b);
+            return b;
+        }
+
+        /// <summary>Marks settings as changed when the user edits any field.</summary>
+        private void TrackChanges(Control root)
+        {
+            foreach (Control c in root.Controls)
             {
-                if (Switcher.IsRetroBatRunning()) { Out("Close RetroBat before recreating media links."); return; }
-                if (MessageBox.Show(this,
-                        "This removes the existing media links in the rom folders and creates them again.\n\n" +
-                        "Real media folders and files are never touched.\n\nContinue?",
-                        Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                if (c == _output) continue;
+                if (c is TextBox) c.TextChanged += (s, e) => { if (!_loading) _dirty = true; };
+                else if (c is ComboBox cb) { cb.TextChanged += (s, e) => { if (!_loading) _dirty = true; }; }
+                else if (c is CheckBox ch) ch.CheckedChanged += (s, e) => { if (!_loading) _dirty = true; };
+                TrackChanges(c);
             }
-
-            RunTask(dryRun ? "Previewing media links..." : "Creating media links...", logToFile: !dryRun, work: (log, stop) =>
-            {
-                log("---- media links " + (dryRun ? "preview" : rebuild ? "recreate" : "create") + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-                var b = new LibraryBuilder(log) { Stop = stop };
-                b.BuildMedia(c, rebuild, dryRun);
-                return stop() ? "Stopped." : b.Failed > 0 ? b.Failed + " media link(s) failed - see the log."
-                     : (dryRun ? "Preview finished: " : "Done: ") + b.Created + " media link(s) " + (dryRun ? "would be " : "") + "created.";
-            });
         }
 
         /// <summary>Dialogs are laid out at 96 DPI; this scales them like the main window.</summary>
@@ -807,32 +757,7 @@ namespace RetroBatFolderSwitcher
         private void SizeLogBox()
         {
             float k = DpiScale();
-            int h = ClientSize.Height / 6;
-            _output.Height = Math.Max((int)(70 * k), Math.Min((int)(220 * k), h));
-        }
-
-        private Button Busy(Button b)
-        {
-            _busyButtons.Add(b);
-            return b;
-        }
-
-        private static Control ListWithButtons(Control list, params Button[] buttons)
-        {
-            var t = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, Margin = new Padding(0) };
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            var col = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Margin = new Padding(0) };
-            for (int i = 0; i < buttons.Length; i++)
-            {
-                var b = buttons[i];
-                b.AutoSize = false; b.Width = 92; b.Height = 26; b.Margin = new Padding(2);
-                col.Controls.Add(b, i % 2, i / 2);
-            }
-            list.Height = Math.Max(72, ((buttons.Length + 1) / 2) * 30 - 4);
-            t.Controls.Add(list, 0, 0);
-            t.Controls.Add(col, 1, 0);
-            return t;
+            _output.Height = Math.Max((int)(60 * k), Math.Min((int)(200 * k), ClientSize.Height / 7));
         }
 
         private string Prompt(string title, string text, string value)
@@ -846,56 +771,13 @@ namespace RetroBatFolderSwitcher
                 f.SuspendLayout();
                 var lbl = new Label { Text = text, Left = 10, Top = 10, Width = 460, AutoSize = false, Height = 20 };
                 var tb = new TextBox { Text = value, Left = 10, Top = 34, Width = 460 };
-                var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Left = 314, Top = 72, Width = 75 };
-                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Left = 395, Top = 72, Width = 75 };
+                var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Left = 314, Top = 72, Width = 75, Height = 28 };
+                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Left = 395, Top = 72, Width = 75, Height = 28 };
                 f.Controls.AddRange(new Control[] { lbl, tb, ok, cancel });
                 f.AcceptButton = ok; f.CancelButton = cancel;
                 ScaleDialog(f);
                 return f.ShowDialog(this) == DialogResult.OK ? tb.Text : null;
             }
-        }
-
-        // ---------- Helpers ----------
-
-        private void RefreshFolderLists()
-        {
-            if (_loadingLib) return;
-            var c = FromUi();
-            string rb = RbDir(c);
-            var names = new List<string>();
-            try
-            {
-                if (Directory.Exists(rb))
-                    names = Directory.GetDirectories(rb)
-                        .Select(Path.GetFileName)
-                        .Where(n => n.StartsWith("rom", StringComparison.OrdinalIgnoreCase) &&
-                                    !n.Equals(c.LinkName, StringComparison.OrdinalIgnoreCase))
-                        .OrderBy(n => n).ToList();
-            }
-            catch { }
-            foreach (var l in _libs)
-                if (!string.IsNullOrWhiteSpace(l.Output) && !names.Contains(l.Output.Trim(), StringComparer.OrdinalIgnoreCase))
-                    names.Add(l.Output.Trim());
-            foreach (var cb in new[] { _wifiFolder, _dockFolder, _defaultFolder })
-            {
-                string keep = cb.Text;
-                cb.Items.Clear();
-                cb.Items.AddRange(names.Cast<object>().ToArray());
-                cb.Text = keep;
-            }
-        }
-
-        private void UpdateEnabled()
-        {
-            _ssid.Enabled = _wifiFolder.Enabled = _wifiOn.Checked;
-            _drives.Enabled = _dockFolder.Enabled = _dockOn.Checked;
-        }
-
-        private void Out(string msg)
-        {
-            if (_output.TextLength > 0) _output.AppendText("\r\n");
-            _output.AppendText(msg);
-            _output.Update();
         }
 
         private static string RbDir(Config c)
@@ -908,47 +790,5 @@ namespace RetroBatFolderSwitcher
             string.Equals(Path.GetFullPath(a).TrimEnd('\\'), Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
 
         private static string Or(string s, string fallback) => string.IsNullOrWhiteSpace(s) ? fallback : s.Trim();
-
-        private static ComboBox FolderCombo() => new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Dock = DockStyle.Fill };
-
-        private static Label Lbl(string t) => new Label { Text = t, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 7, 8, 3) };
-
-        private static Control Spacer() => new Panel { Height = 4, Margin = new Padding(0) };
-
-        private static Button Btn(string text, Action onClick, bool bold = false)
-        {
-            var b = new Button { Text = text, AutoSize = true, Padding = new Padding(6, 2, 6, 2), Margin = new Padding(3) };
-            if (bold) b.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
-            b.Click += (s, e) => onClick();
-            return b;
-        }
-
-        private static TableLayoutPanel Grid()
-        {
-            var t = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 3, Padding = new Padding(4) };
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            return t;
-        }
-
-        private static void AddRow(TableLayoutPanel t, Control a, Control b, Control c = null)
-        {
-            int row = t.RowCount++;
-            t.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            if (a is CheckBox) a.Margin = new Padding(3, 6, 8, 3);
-            if (b is TextBox || b is ComboBox) b.Dock = DockStyle.Fill;
-            if (b is Label) b.Margin = new Padding(3, 7, 3, 3);
-            t.Controls.Add(a, 0, row);
-            t.Controls.Add(b, 1, row);
-            if (c != null) t.Controls.Add(c, 2, row);
-        }
-
-        private static GroupBox Group(string title, Control content)
-        {
-            var g = new GroupBox { Text = title, Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(8, 6, 8, 8) };
-            g.Controls.Add(content);
-            return g;
-        }
     }
 }

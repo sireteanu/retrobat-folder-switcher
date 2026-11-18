@@ -64,6 +64,26 @@ Turning on Developer Mode is the easiest option. It lets symlinks work without "
 
 Your three groups from the `.bat` are the starting setup.
 
+## Media links
+
+If your rom folder is copied without its media (for example `robocopy X:\sets\mapping\retrobat\SDCARD E:\Roms /MIR /XD media`) and the media lives somewhere else (for example `MEDIA_FULL` copied to `C:\RetroBat\Media`), the **Media links** tab puts it back with links:
+
+```
+E:\Roms\nes\media   ->   C:\RetroBat\Media\nes\media
+E:\Roms\snes\media  ->   C:\RetroBat\Media\snes\media
+...
+```
+
+![Media links](docs/media.png)
+
+- Every system folder in each **rom folder** gets a `media` link, when `<media folder>\<system>\media` exists.
+- Systems without media are skipped, and an existing real `media` folder is never touched.
+- `robocopy /MIR /XD media` leaves the links alone, because excluded folders are never purged. You can re-run the robocopy any time.
+- **Create media links** adds missing ones. **Recreate media links** removes and recreates the links, never real folders.
+- When *Update library and media links every time RetroBat is launched* is on (Libraries tab), media links are updated on launch too.
+- Libraries that link to `E:\Roms\<system>` pick up the media automatically, because they go through the same folder.
+- With `C:` and `E:` both local, these are junctions, so no admin rights or Developer Mode are needed.
+
 ## Configuration file
 
 Settings are stored in `FolderSwitcher.json` next to the exe (created on first run):
@@ -86,7 +106,11 @@ Settings are stored in `FolderSwitcher.json` next to the exe (created on first r
   ],
   "SkipPrefix": "_",
   "LinkType": "Auto",
-  "BuildLibrariesOnLaunch": false
+  "BuildLibrariesOnLaunch": false,
+  "MediaLinksEnabled": true,
+  "MediaFolder": "C:\\RetroBat\\Media",
+  "MediaRomFolders": [ "E:\\Roms" ],
+  "MediaLinkName": "media"
 }
 ```
 
@@ -96,8 +120,8 @@ Settings are stored in `FolderSwitcher.json` next to the exe (created on first r
 ## Command line
 
 - `--settings`: open the settings window.
-- `--build-libraries`: build all libraries and exit (add `--dry-run` to preview).
-- `--rebuild-libraries`: remove and recreate all library links, then exit.
+- `--build-libraries`: build all libraries and media links, then exit (add `--dry-run` to preview).
+- `--rebuild-libraries`: remove and recreate all library and media links, then exit.
 - `--dry-run`: log the decision only; change nothing and don't launch.
 - `--no-launch`: switch the folder but don't start RetroBat.
 

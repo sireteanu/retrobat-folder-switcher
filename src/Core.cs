@@ -44,6 +44,17 @@ namespace RetroBatFolderSwitcher
 
         /// <summary>Add links for new system folders every time RetroBat is launched.</summary>
         public bool BuildLibrariesOnLaunch { get; set; } = false;
+
+        // ---------- Media links ----------
+
+        /// <summary>Adds &lt;rom folder&gt;\&lt;system&gt;\media links pointing at &lt;MediaFolder&gt;\&lt;system&gt;\media.</summary>
+        public bool MediaLinksEnabled { get; set; } = true;
+        /// <summary>Holds one folder per system, each containing a "media" folder (copy of MEDIA_FULL).</summary>
+        public string MediaFolder { get; set; } = @"C:\RetroBat\Media";
+        /// <summary>Rom folders whose system folders get a media link (e.g. the robocopy /XD media destination).</summary>
+        public List<string> MediaRomFolders { get; set; } = new List<string> { @"E:\Roms" };
+        /// <summary>Name of the link inside each system folder, and of the folder it points to.</summary>
+        public string MediaLinkName { get; set; } = "media";
     }
 
     public class LibraryGroup
@@ -90,6 +101,7 @@ namespace RetroBatFolderSwitcher
             var c = new JavaScriptSerializer().Deserialize<Config>(File.ReadAllText(path)) ?? new Config();
             if (c.Libraries == null) c.Libraries = new List<LibraryGroup>();
             if (c.DockedDrives == null) c.DockedDrives = new List<string>();
+            if (c.MediaRomFolders == null) c.MediaRomFolders = new List<string>();
             return c;
         }
 

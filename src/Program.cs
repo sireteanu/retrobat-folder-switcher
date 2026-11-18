@@ -80,7 +80,7 @@ namespace RetroBatFolderSwitcher
             catch (Exception ex) { Log("Config error: " + ex.Message); return 1; }
             if (rebuild && !dryRun && Switcher.IsRetroBatRunning())
             {
-                Log("RetroBat is running - close it before rebuilding libraries.");
+                Log("RetroBat is running - close it before rebuilding links.");
                 return 1;
             }
             var b = new LibraryBuilder(Log);

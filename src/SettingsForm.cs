@@ -43,7 +43,14 @@ namespace RetroBatFolderSwitcher
         private readonly ListBox _srcList = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, HorizontalScrollbar = true };
         private readonly TextBox _skipPrefix = new TextBox { Width = 70 };
         private readonly ComboBox _linkType = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
-        private readonly CheckBox _buildOnLaunch = new CheckBox { Text = "Add links for new systems every time RetroBat is launched", AutoSize = true };
+        private readonly CheckBox _buildOnLaunch = new CheckBox { Text = "Update library and media links every time RetroBat is launched", AutoSize = true };
+
+        // Media tab
+        private readonly CheckBox _mediaOn = new CheckBox { Text = "Create media links (also when RetroBat is launched, if that option is on)", AutoSize = true };
+        private readonly TextBox _mediaFolder = new TextBox();
+        private readonly TextBox _mediaName = new TextBox { Width = 100 };
+        private readonly ListBox _mediaRoms = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, HorizontalScrollbar = true };
+        private readonly Label _mediaExample = new Label { AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(3, 4, 3, 6) };
         private readonly List<Control> _libEditor = new List<Control>();
 
         private bool _dirty;
@@ -97,9 +104,13 @@ namespace RetroBatFolderSwitcher
             var libPage = new TabPage("Libraries") { Padding = new Padding(8), AutoScroll = true };
             BuildLibrariesPage(libPage);
 
+            var mediaPage = new TabPage("Media links") { Padding = new Padding(8), AutoScroll = true };
+            BuildMediaPage(mediaPage);
+
             var tabs = new TabControl { Dock = DockStyle.Fill };
             tabs.TabPages.Add(switchPage);
             tabs.TabPages.Add(libPage);
+            tabs.TabPages.Add(mediaPage);
 
             // Dock order: Fill first, then Bottom controls top-to-bottom.
             Controls.Add(tabs);
@@ -128,6 +139,9 @@ namespace RetroBatFolderSwitcher
             _skipPrefix.TextChanged += (s, e) => _dirty = true;
             _linkType.SelectedIndexChanged += (s, e) => _dirty = true;
             _buildOnLaunch.CheckedChanged += (s, e) => _dirty = true;
+            _mediaOn.CheckedChanged += (s, e) => { _dirty = true; UpdateMediaExample(); };
+            _mediaFolder.TextChanged += (s, e) => { _dirty = true; UpdateMediaExample(); };
+            _mediaName.TextChanged += (s, e) => { _dirty = true; UpdateMediaExample(); };
             _srcList.DoubleClick += (s, e) => EditSource();
 
             FormClosing += OnClosingAsk;
@@ -164,6 +178,12 @@ namespace RetroBatFolderSwitcher
             _linkType.SelectedItem = new[] { "Auto", "Symlink", "Junction" }
                 .FirstOrDefault(t => t.Equals(c.LinkType ?? "", StringComparison.OrdinalIgnoreCase)) ?? "Auto";
             _buildOnLaunch.Checked = c.BuildLibrariesOnLaunch;
+            _mediaOn.Checked = c.MediaLinksEnabled;
+            _mediaFolder.Text = c.MediaFolder ?? "";
+            _mediaName.Text = c.MediaLinkName ?? "media";
+            _mediaRoms.Items.Clear();
+            foreach (var r in c.MediaRomFolders ?? new List<string>()) _mediaRoms.Items.Add(r);
+            UpdateMediaExample();
             RefreshLibList(_libs.Count > 0 ? 0 : -1);
             RefreshFolderLists();
         }
@@ -177,6 +197,10 @@ namespace RetroBatFolderSwitcher
             SkipPrefix = _skipPrefix.Text.Trim(),
             LinkType = (_linkType.SelectedItem as string) ?? "Auto",
             BuildLibrariesOnLaunch = _buildOnLaunch.Checked,
+            MediaLinksEnabled = _mediaOn.Checked,
+            MediaFolder = _mediaFolder.Text.Trim(),
+            MediaLinkName = Or(_mediaName.Text, "media"),
+            MediaRomFolders = _mediaRoms.Items.Cast<string>().ToList(),
             RetroBatPath = _rbPath.Text.Trim(),
             RetroBatExe = Or(_exe.Text, "retrobat.exe"),
             LaunchArguments = _args.Text.Trim(),
@@ -599,7 +623,7 @@ namespace RetroBatFolderSwitcher
             UseWaitCursor = true;
             try
             {
-                if (all) b.BuildAll(c, rebuild, dryRun);
+                if (all) b.BuildLibraries(c, rebuild, dryRun);
                 else
                 {
                     b.Build(c, c.Libraries[_libIdx], rebuild, dryRun);
@@ -612,6 +636,121 @@ namespace RetroBatFolderSwitcher
                 Out("Some links failed. For network sources or Link type 'Symlink', turn on Developer Mode " +
                     "(Settings > System > For developers) or run this as administrator.");
             RefreshFolderLists();
+        }
+
+        // ---------- Media tab ----------
+
+        private void BuildMediaPage(TabPage page)
+        {
+            var intro = new Label
+            {
+                Dock = DockStyle.Top, AutoSize = false, Height = 52,
+                Text = "For every system folder in the rom folders below, adds a 'media' link pointing at the same system's " +
+                       "media in your media folder - e.g. for roms copied with  robocopy ... /XD media. " +
+                       "Systems without media are skipped, and an existing real media folder is never touched."
+            };
+
+            var g = Grid();
+            AddRow(g, Lbl(""), _mediaOn);
+            AddRow(g, Lbl("Media folder"), _mediaFolder, Btn("Browse...", BrowseMediaFolder));
+            AddRow(g, Lbl(""), new Label { Text = "Contains one folder per system, each with a media folder inside (a copy of MEDIA_FULL).", AutoSize = true, ForeColor = SystemColors.GrayText });
+            var nameRow = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0), WrapContents = false };
+            nameRow.Controls.Add(_mediaName);
+            nameRow.Controls.Add(new Label { Text = "name of the link, and of the folder inside each system's media folder", AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(8, 7, 3, 3) });
+            AddRow(g, Lbl("Link name"), nameRow);
+            AddRow(g, Lbl("Rom folders"), new Label { Text = "Each system folder in these gets a media link.", AutoSize = true, ForeColor = SystemColors.GrayText });
+            var romsGrid = ListWithButtons(_mediaRoms,
+                Btn("Add folder...", AddMediaRomFolder), Btn("Add path...", AddMediaRomPath), Btn("Remove", RemoveMediaRom));
+            g.Controls.Add(romsGrid, 0, g.RowCount);
+            g.SetColumnSpan(romsGrid, 3);
+            g.RowCount++;
+            g.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            AddRow(g, Lbl("Example"), _mediaExample);
+
+            var actions = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 4, 0, 0), WrapContents = true };
+            actions.Controls.Add(Btn("Preview (dry run)", () => RunMedia(rebuild: false, dryRun: true)));
+            actions.Controls.Add(Btn("Create media links", () => RunMedia(rebuild: false, dryRun: false), bold: true));
+            actions.Controls.Add(Btn("Recreate media links...", () => RunMedia(rebuild: true, dryRun: false)));
+            g.Controls.Add(actions, 0, g.RowCount);
+            g.SetColumnSpan(actions, 3);
+            g.RowCount++;
+            g.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            page.Controls.Add(Group("Media links", g));   // Top-docked: added bottom-to-top
+            page.Controls.Add(intro);
+
+            var tips = new ToolTip();
+            tips.SetToolTip(_mediaFolder, "e.g. C:\\RetroBat\\Media, where MEDIA_FULL is copied to.");
+            tips.SetToolTip(_mediaRoms, "e.g. E:\\Roms - the robocopy destination that has no media folders.");
+        }
+
+        private void UpdateMediaExample()
+        {
+            string name = Or(_mediaName.Text, "media");
+            string rom = _mediaRoms.Items.Count > 0 ? (string)_mediaRoms.Items[0] : "<rom folder>";
+            string media = string.IsNullOrWhiteSpace(_mediaFolder.Text) ? "<media folder>" : _mediaFolder.Text.Trim();
+            _mediaExample.Text = Path.Combine(Path.Combine(rom, "nes"), name) + "   →   " + Path.Combine(Path.Combine(media, "nes"), name);
+        }
+
+        private void BrowseMediaFolder()
+        {
+            using (var dlg = new FolderBrowserDialog { Description = "Select the media folder (one folder per system, each with a media folder inside)" })
+            {
+                if (Directory.Exists(_mediaFolder.Text)) dlg.SelectedPath = _mediaFolder.Text;
+                if (dlg.ShowDialog(this) == DialogResult.OK) _mediaFolder.Text = dlg.SelectedPath;
+            }
+        }
+
+        private void AddMediaRomFolder()
+        {
+            using (var dlg = new FolderBrowserDialog { Description = "Select a rom folder (contains system folders such as nes, snes, ...)" })
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK) AddMediaRom(dlg.SelectedPath);
+            }
+        }
+
+        private void AddMediaRomPath()
+        {
+            string p = Prompt("Add rom folder", "Rom folder path (e.g. E:\\Roms):", "");
+            if (!string.IsNullOrWhiteSpace(p)) AddMediaRom(p.Trim());
+        }
+
+        private void AddMediaRom(string path)
+        {
+            if (_mediaRoms.Items.Cast<string>().Any(x => x.Equals(path, StringComparison.OrdinalIgnoreCase))) return;
+            _mediaRoms.Items.Add(path);
+            _dirty = true;
+            UpdateMediaExample();
+        }
+
+        private void RemoveMediaRom()
+        {
+            int i = _mediaRoms.SelectedIndex;
+            if (i < 0) return;
+            _mediaRoms.Items.RemoveAt(i);
+            _dirty = true;
+            UpdateMediaExample();
+        }
+
+        private void RunMedia(bool rebuild, bool dryRun)
+        {
+            var c = FromUi();
+            if (rebuild)
+            {
+                if (Switcher.IsRetroBatRunning()) { Out("Close RetroBat before recreating media links."); return; }
+                if (MessageBox.Show(this,
+                        "This removes the existing media links in the rom folders and creates them again.\n\n" +
+                        "Real media folders and files are never touched.\n\nContinue?",
+                        Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            }
+
+            Out("---- media links " + (dryRun ? "preview" : rebuild ? "recreate" : "create") + " ----");
+            var log = dryRun ? (Action<string>)Out : s => { Out(s); Program.Log(s); };
+            var b = new LibraryBuilder(log);
+            UseWaitCursor = true;
+            try { b.BuildMedia(c, rebuild, dryRun); }
+            catch (Exception ex) { Out("ERROR: " + ex.Message); }
+            finally { UseWaitCursor = false; }
         }
 
         private static Control ListWithButtons(ListBox list, params Button[] buttons)

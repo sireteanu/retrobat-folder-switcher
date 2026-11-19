@@ -18,15 +18,20 @@ namespace RetroBatFolderSwitcher
         /// <summary>Name of the folder RetroBat reads (becomes a junction).</summary>
         public string LinkName { get; set; } = "roms";
 
-        /// <summary>Rule 1: connected Wi-Fi name contains this text (case-insensitive).</summary>
-        public bool WifiRuleEnabled { get; set; } = true;
-        public string WifiSsidContains { get; set; } = "sireteanu";
-        public string WifiFolder { get; set; } = "roms-local";
-
-        /// <summary>Rule 2: all of these drives are present and ready.</summary>
+        /// <summary>Rule 1 (Docked): all of these drives are present and ready.</summary>
         public bool DockedRuleEnabled { get; set; } = true;
         public List<string> DockedDrives { get; set; } = new List<string> { "G:\\", "H:\\" };
         public string DockedFolder { get; set; } = "roms-docked";
+
+        /// <summary>Rule 2 (Home network): this server answers on a wired or Wi-Fi adapter (not through a VPN).</summary>
+        public bool HomeRuleEnabled { get; set; } = true;
+        public string HomeServer { get; set; } = "192.168.1.6";
+        /// <summary>Optional: the server's hardware address, so a different network using the same IPs doesn't count.</summary>
+        public string HomeServerMac { get; set; } = "";
+        public string HomeFolder { get; set; } = "roms-local";
+
+        /// <summary>Sync jobs only run when the home server is on the local network.</summary>
+        public bool SyncOnlyOnHomeNetwork { get; set; } = true;
 
         /// <summary>Rule 3: everything else. The original roms folder is moved here on first run.</summary>
         public string DefaultFolder { get; set; } = "roms-default";
@@ -105,7 +110,20 @@ namespace RetroBatFolderSwitcher
                 log?.Invoke("Wrote default config: " + path);
                 return def;
             }
-            var c = new JavaScriptSerializer().Deserialize<Config>(File.ReadAllText(path)) ?? new Config();
+            var js = new JavaScriptSerializer();
+            string json = File.ReadAllText(path);
+            var c = js.Deserialize<Config>(json) ?? new Config();
+
+            // Settings from before the Wi-Fi rule was replaced: keep its roms folder for the home network rule.
+            try
+            {
+                var raw = js.Deserialize<Dictionary<string, object>>(json);
+                if (raw != null && !raw.ContainsKey("HomeFolder") && raw.TryGetValue("WifiFolder", out object wf) && wf is string s && s.Trim().Length > 0)
+                    c.HomeFolder = s;
+                if (raw != null && !raw.ContainsKey("HomeRuleEnabled") && raw.TryGetValue("WifiRuleEnabled", out object we) && we is bool b)
+                    c.HomeRuleEnabled = b;
+            }
+            catch { }
             if (c.Libraries == null) c.Libraries = new List<LibraryGroup>();
             if (c.DockedDrives == null) c.DockedDrives = new List<string>();
             if (c.MediaRomFolders == null) c.MediaRomFolders = new List<string>();
@@ -164,7 +182,7 @@ namespace RetroBatFolderSwitcher
 
         // ---------- Rules ----------
 
-        /// <summary>Rules in order: 1) docked drives, 2) home Wi-Fi, 3) anywhere else.</summary>
+        /// <summary>Rules in order: 1) docked drives, 2) home network, 3) anywhere else.</summary>
         public string ChooseFolder(Config cfg, out string reason)
         {
             // 1) Docked: all listed drives connected
@@ -179,16 +197,16 @@ namespace RetroBatFolderSwitcher
                 }
             }
 
-            // 2) Home Wi-Fi
-            if (cfg.WifiRuleEnabled && !string.IsNullOrWhiteSpace(cfg.WifiSsidContains))
+            // 2) Home network: the server answers on a wired / Wi-Fi adapter (never through the VPN)
+            if (cfg.HomeRuleEnabled && !string.IsNullOrWhiteSpace(cfg.HomeServer))
             {
-                var ssids = Wifi.GetConnectedSsids();
-                _log("Connected Wi-Fi: " + (ssids.Count == 0 ? "(none detected)" : string.Join(", ", ssids)));
-                var hit = ssids.FirstOrDefault(s => s.IndexOf(cfg.WifiSsidContains.Trim(), StringComparison.OrdinalIgnoreCase) >= 0);
-                if (hit != null)
+                var r = LocalNetwork.Check(cfg.HomeServer, cfg.HomeServerMac);
+                foreach (var d in r.Details) _log("Home network: " + d);
+                if (r.Warning != null) _log("WARNING: " + r.Warning);
+                if (r.Local)
                 {
-                    reason = "Home Wi-Fi ('" + hit + "')";
-                    return cfg.WifiFolder;
+                    reason = "Home network (" + r.Summary + ")";
+                    return cfg.HomeFolder;
                 }
             }
 

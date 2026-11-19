@@ -3,88 +3,165 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace RetroBatFolderSwitcher
 {
-    // ================= Wi-Fi =================
+    // ================= Local network check =================
 
-    internal static class Wifi
+    internal class LocalCheckResult
     {
-        public static List<string> GetConnectedSsids()
+        public bool Local;
+        public string Server;
+        public string Adapter;
+        public string Mac;
+        /// <summary>Set when Windows would route traffic to the server through another adapter (e.g. the VPN).</summary>
+        public string Warning;
+        public readonly List<string> Details = new List<string>();
+
+        public string Summary => Local
+            ? Server + " found on " + Adapter + " (" + Mac + ")"
+            : Server + " is not on the local network";
+    }
+
+    /// <summary>
+    /// Tells whether a server is on the same physical network, i.e. reachable without a VPN.
+    /// It asks for the server's hardware (MAC) address with ARP from each wired / Wi-Fi adapter on the
+    /// server's subnet. ARP never crosses a VPN tunnel such as WireGuard, so an answer means "local".
+    /// Optionally the answer must come from the expected MAC (many networks reuse 192.168.1.x).
+    /// </summary>
+    internal static class LocalNetwork
+    {
+        [DllImport("iphlpapi.dll", ExactSpelling = true)]
+        private static extern int SendARP(uint destIp, uint srcIp, byte[] macAddr, ref uint physAddrLen);
+
+        [DllImport("iphlpapi.dll")]
+        private static extern int GetBestInterface(uint destAddr, out uint bestIfIndex);
+
+        public static LocalCheckResult Check(string server, string expectedMac)
         {
-            var result = new List<string>();
-            try { result.AddRange(FromWlanApi()); } catch { }
-            if (result.Count == 0)
+            var r = new LocalCheckResult { Server = (server ?? "").Trim() };
+            IPAddress ip = Resolve(r.Server, r);
+            if (ip == null) return r;
+            r.Server = ip.ToString();
+            uint dest = ToUInt(ip);
+
+            NetworkInterface[] all;
+            try { all = NetworkInterface.GetAllNetworkInterfaces(); }
+            catch (Exception ex) { r.Details.Add("Cannot list network adapters: " + ex.Message); return r; }
+
+            bool anyOnSubnet = false;
+            foreach (var ni in all)
             {
-                try { result.AddRange(FromNetsh()); } catch { }
+                if (ni.OperationalStatus != OperationalStatus.Up || !IsPhysical(ni)) continue;
+                IPInterfaceProperties props;
+                try { props = ni.GetIPProperties(); } catch { continue; }
+
+                foreach (var ua in props.UnicastAddresses)
+                {
+                    if (ua.Address.AddressFamily != AddressFamily.InterNetwork || ua.IPv4Mask == null) continue;
+                    if (!SameSubnet(ua.Address, ip, ua.IPv4Mask)) continue;
+                    anyOnSubnet = true;
+
+                    var mac = new byte[6];
+                    uint len = 6;
+                    int rc;
+                    try { rc = SendARP(dest, ToUInt(ua.Address), mac, ref len); }
+                    catch (Exception ex) { r.Details.Add(ni.Name + ": ARP not available (" + ex.Message + ")"); continue; }
+                    if (rc != 0 || len == 0)
+                    {
+                        r.Details.Add(ni.Name + " (" + ua.Address + "): no answer from " + ip);
+                        continue;
+                    }
+
+                    string found = FormatMac(mac, len);
+                    if (!string.IsNullOrWhiteSpace(expectedMac) && NormalizeMac(expectedMac) != NormalizeMac(found))
+                    {
+                        r.Details.Add(ni.Name + ": " + ip + " answered as " + found + ", not your server (" + expectedMac.Trim() + ")");
+                        continue;
+                    }
+
+                    r.Local = true;
+                    r.Adapter = ni.Name;
+                    r.Mac = found;
+                    r.Details.Add(ni.Name + " (" + ua.Address + "): found " + ip + " at " + found);
+                    r.Warning = RouteWarning(dest, ip, ni, all);
+                    return r;
+                }
             }
-            return result.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (!anyOnSubnet)
+                r.Details.Add("No connected wired or Wi-Fi adapter is on " + ip + "'s network.");
+            return r;
         }
 
-        [DllImport("wlanapi.dll")] private static extern int WlanOpenHandle(uint ver, IntPtr reserved, out uint negotiated, out IntPtr handle);
-        [DllImport("wlanapi.dll")] private static extern int WlanCloseHandle(IntPtr handle, IntPtr reserved);
-        [DllImport("wlanapi.dll")] private static extern int WlanEnumInterfaces(IntPtr handle, IntPtr reserved, out IntPtr list);
-        [DllImport("wlanapi.dll")] private static extern int WlanQueryInterface(IntPtr handle, ref Guid iface, int opCode, IntPtr reserved, out int size, out IntPtr data, IntPtr valueType);
-        [DllImport("wlanapi.dll")] private static extern void WlanFreeMemory(IntPtr mem);
-
-        private const int OpcodeCurrentConnection = 7;
-        private const int InterfaceInfoSize = 16 + 512 + 4;   // GUID + WCHAR[256] + state
-        private const int SsidLengthOffset = 4 + 4 + 512;     // isState + mode + profileName
-        private const int SsidOffset = SsidLengthOffset + 4;
-
-        private static IEnumerable<string> FromWlanApi()
+        /// <summary>Warns if Windows would send traffic to the server through a different adapter (the VPN).</summary>
+        private static string RouteWarning(uint dest, IPAddress ip, NetworkInterface local, NetworkInterface[] all)
         {
-            var found = new List<string>();
-            if (WlanOpenHandle(2, IntPtr.Zero, out _, out IntPtr h) != 0) return found;
             try
             {
-                if (WlanEnumInterfaces(h, IntPtr.Zero, out IntPtr list) != 0) return found;
-                try
+                int localIndex = local.GetIPProperties().GetIPv4Properties().Index;
+                if (GetBestInterface(dest, out uint best) != 0 || best == (uint)localIndex) return null;
+                string bestName = all.Where(n =>
                 {
-                    int count = Marshal.ReadInt32(list);
-                    for (int i = 0; i < count; i++)
-                    {
-                        IntPtr item = IntPtr.Add(list, 8 + i * InterfaceInfoSize);
-                        var guid = (Guid)Marshal.PtrToStructure(item, typeof(Guid));
-                        if (WlanQueryInterface(h, ref guid, OpcodeCurrentConnection, IntPtr.Zero, out _, out IntPtr data, IntPtr.Zero) != 0)
-                            continue;
-                        try
-                        {
-                            int len = Math.Min(32, Marshal.ReadInt32(data, SsidLengthOffset));
-                            var bytes = new byte[len];
-                            Marshal.Copy(IntPtr.Add(data, SsidOffset), bytes, 0, len);
-                            found.Add(Encoding.UTF8.GetString(bytes));
-                            // Profile name is usually the SSID too; helps if SSID is hidden from us.
-                            found.Add(Marshal.PtrToStringUni(IntPtr.Add(data, 8)));
-                        }
-                        finally { WlanFreeMemory(data); }
-                    }
-                }
-                finally { WlanFreeMemory(list); }
+                    try { return n.GetIPProperties().GetIPv4Properties()?.Index == (int)best; } catch { return false; }
+                }).Select(n => n.Name).FirstOrDefault() ?? ("interface " + best);
+                return "Windows sends traffic for " + ip + " through '" + bestName + "', not '" + local.Name +
+                       "', so copies may still go through the VPN. Remove your home subnet from WireGuard's AllowedIPs to fix this.";
             }
-            finally { WlanCloseHandle(h, IntPtr.Zero); }
-            return found;
+            catch { return null; }
         }
 
-        private static IEnumerable<string> FromNetsh()
+        private static bool IsPhysical(NetworkInterface ni)
         {
-            var psi = new ProcessStartInfo("netsh", "wlan show interfaces")
+            switch (ni.NetworkInterfaceType)
             {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true
-            };
-            using (var p = Process.Start(psi))
-            {
-                string output = p.StandardOutput.ReadToEnd();
-                p.WaitForExit(5000);
-                return Regex.Matches(output, @"^\s*(SSID|Profile)\s*:\s*(.+?)\s*$", RegexOptions.Multiline)
-                            .Cast<Match>().Select(m => m.Groups[2].Value).ToList();
+                case NetworkInterfaceType.Ethernet:
+                case NetworkInterfaceType.GigabitEthernet:
+                case NetworkInterfaceType.FastEthernetT:
+                case NetworkInterfaceType.FastEthernetFx:
+                case NetworkInterfaceType.Ethernet3Megabit:
+                case NetworkInterfaceType.Wireless80211:
+                    break;
+                default:
+                    return false; // loopback, tunnels, WireGuard (Wintun) etc.
             }
+            string d = ((ni.Description ?? "") + " " + (ni.Name ?? "")).ToLowerInvariant();
+            foreach (var vpn in new[] { "wireguard", "wintun", "tap-windows", "openvpn", "tailscale", "zerotier", "vpn" })
+                if (d.Contains(vpn)) return false;
+            return true;
         }
+
+        private static IPAddress Resolve(string server, LocalCheckResult r)
+        {
+            if (server.Length == 0) { r.Details.Add("No server address set."); return null; }
+            if (IPAddress.TryParse(server, out IPAddress ip) && ip.AddressFamily == AddressFamily.InterNetwork) return ip;
+            try
+            {
+                ip = Dns.GetHostAddresses(server).FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+                if (ip == null) r.Details.Add("'" + server + "' has no IPv4 address.");
+                return ip;
+            }
+            catch (Exception ex) { r.Details.Add("Cannot find '" + server + "': " + ex.Message); return null; }
+        }
+
+        private static uint ToUInt(IPAddress ip) => BitConverter.ToUInt32(ip.GetAddressBytes(), 0); // network byte order
+
+        private static bool SameSubnet(IPAddress a, IPAddress b, IPAddress mask)
+        {
+            byte[] x = a.GetAddressBytes(), y = b.GetAddressBytes(), m = mask.GetAddressBytes();
+            for (int i = 0; i < 4; i++) if ((x[i] & m[i]) != (y[i] & m[i])) return false;
+            return true;
+        }
+
+        private static string FormatMac(byte[] mac, uint len) =>
+            string.Join("-", mac.Take((int)Math.Min(len, (uint)mac.Length)).Select(b => b.ToString("X2")));
+
+        public static string NormalizeMac(string mac) =>
+            new string((mac ?? "").ToUpperInvariant().Where(Uri.IsHexDigit).ToArray());
     }
 
     // ================= Junctions (no admin needed) =================

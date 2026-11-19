@@ -2,7 +2,7 @@
 
 A small Windows tool for RetroBat that:
 
-1. **Switches the roms folder** on launch: by which drives are plugged in, by Wi-Fi network, or a default.
+1. **Switches the roms folder** on launch: by which drives are plugged in, by whether your home server is on the local network, or a default.
 2. **Builds library folders** made of links to system folders spread across several drives.
 3. **Adds media links** to rom folders that were copied without their `media` folders.
 4. **Runs robocopy syncs** one job at a time, with a preview and the full output in the log.
@@ -27,7 +27,7 @@ It needs .NET Framework 4.8, which ships with Windows 10 and 11.
 | Rule | Condition | Roms folder used |
 |---|---|---|
 | 1. Docked | All the listed drives are connected | Docked folder |
-| 2. Home Wi-Fi | Connected Wi-Fi name contains the text you set | Wi-Fi folder |
+| 2. Home network | Your home server is on the local network (wired or Wi-Fi, never through a VPN) | Home folder |
 | 3. Anywhere else | Nothing above matched | Default folder (your original `roms`) |
 
 Rules are checked from top to bottom, and the first one that matches wins. Each of the first two can be turned off.
@@ -38,7 +38,14 @@ RetroBat always reads `RetroBat\roms`. The tool turns `roms` into a **link** and
 - If a rule's folder doesn't exist, it falls back to the default. If RetroBat is already running, the link is left alone.
 - **Right now** shows which rule would win at this moment, and **Test (dry run)** shows exactly what would happen.
 - **Before launching** can update library links and/or media links first, so new systems show up automatically.
-- Wi-Fi detection reads the Wi-Fi adapter directly, so a VPN such as WireGuard doesn't affect it. On **Windows 11 24H2+**, apps only see the Wi-Fi name when Location is on (Settings → Privacy & security → Location → *Let desktop apps access your location*).
+### How "Home network" works
+
+A ping can't tell home from away when a VPN such as WireGuard is always on: the server answers either way. Instead, the tool sends an **ARP** request for the server from each wired or Wi-Fi adapter on the server's subnet. ARP only works on the physical network and never crosses a VPN tunnel. So if the server answers, it's on your local network, whether you're wired or on Wi-Fi.
+
+- **Server address:** your server's IP or name (e.g. `192.168.1.6`).
+- **Server MAC (optional, recommended):** many networks use `192.168.1.x`, so a hotel or a friend's network could have a different device at the same address. With the MAC set, only *your* server counts. Click **Use current** once while you're at home to fill it in.
+- **Check** shows what was found in Activity.
+- If Windows would still send traffic to the server through the VPN while you're at home, you get a warning. That happens when WireGuard's `AllowedIPs` includes your home subnet.
 
 ## Libraries
 
@@ -83,6 +90,7 @@ Two lists of mirror jobs. Select one or more jobs and run only those, so a full 
 - **Run** shows the exact commands and asks for confirmation first.
 - Robocopy's full output streams into the log window and `FolderSwitcher.log`. Each job ends with its exit code and what it means.
 - **Stop** (next to the Activity status) cancels the running job, and any remaining jobs are skipped.
+- **Only run when the home server is on the local network** (on by default): before running, the tool does the same check as the Home network rule. If the server can only be reached through WireGuard, the sync is skipped.
 - **Extra robocopy options** (default `/R:2 /W:5 /NP`) are added to every job. Robocopy's default retry setting can wait for days on a single locked file.
 - Excluded folders are separated by spaces or commas. Put quotes around names that contain spaces: `"my folder"`.
 - **Safety checks:** a job won't run if the input is missing or empty (mirroring an empty folder would wipe the output), if the output is a whole drive or a system folder, or if the input and output overlap.

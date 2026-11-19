@@ -22,9 +22,10 @@ namespace RetroBatFolderSwitcher
         private readonly CheckBox _dockOn = RuleHeader("1.  Docked");
         private readonly TextBox _drives = new TextBox();
         private readonly ComboBox _dockFolder = FolderCombo();
-        private readonly CheckBox _wifiOn = RuleHeader("2.  Home Wi-Fi");
-        private readonly TextBox _ssid = new TextBox();
-        private readonly ComboBox _wifiFolder = FolderCombo();
+        private readonly CheckBox _homeOn = RuleHeader("2.  Home network");
+        private readonly TextBox _server = new TextBox();
+        private readonly TextBox _serverMac = new TextBox();
+        private readonly ComboBox _homeFolder = FolderCombo();
         private readonly ComboBox _defaultFolder = FolderCombo();
         private readonly Label _now = new Label { AutoSize = true, Margin = new Padding(3, 8, 3, 3) };
         private readonly CheckBox _libsOnLaunch = new CheckBox { Text = "Update library links", AutoSize = true, Margin = new Padding(3, 3, 24, 3) };
@@ -90,7 +91,7 @@ namespace RetroBatFolderSwitcher
             TrackChanges(this);
 
             _dockOn.CheckedChanged += (s, e) => UpdateEnabled();
-            _wifiOn.CheckedChanged += (s, e) => UpdateEnabled();
+            _homeOn.CheckedChanged += (s, e) => UpdateEnabled();
             _rbPath.Leave += (s, e) => RefreshFolderLists();
             _flushTimer.Tick += (s, e) => FlushTaskLines();
             _flushTimer.Start();
@@ -117,9 +118,10 @@ namespace RetroBatFolderSwitcher
             AddRow(r, Indent(Lbl("Drives connected")), _drives, Btn("Check", CheckDrives));
             AddRow(r, Indent(Lbl("Roms folder")), _dockFolder, Btn("Open", () => OpenFolder(_dockFolder.Text)));
             AddFull(r, Gap(4));
-            AddFull(r, _wifiOn);
-            AddRow(r, Indent(Lbl("Wi-Fi name contains")), _ssid, Btn("Detect", UseCurrentWifi));
-            AddRow(r, Indent(Lbl("Roms folder")), _wifiFolder, Btn("Open", () => OpenFolder(_wifiFolder.Text)));
+            AddFull(r, _homeOn);
+            AddRow(r, Indent(Lbl("Server address")), _server, Btn("Check", CheckHome));
+            AddRow(r, Indent(Lbl("Server MAC (optional)")), _serverMac, Btn("Use current", UseCurrentMac));
+            AddRow(r, Indent(Lbl("Roms folder")), _homeFolder, Btn("Open", () => OpenFolder(_homeFolder.Text)));
             AddFull(r, Gap(4));
             AddFull(r, RuleTitle("3.  Anywhere else"));
             AddRow(r, Indent(Lbl("Roms folder")), _defaultFolder, Btn("Open", () => OpenFolder(_defaultFolder.Text)));
@@ -153,13 +155,18 @@ namespace RetroBatFolderSwitcher
             AddRow(g, Lbl("Program"), line);
             var acts = ButtonRow(Btn("Test (dry run)", TestDryRun), Btn("Create desktop shortcuts", CreateShortcuts));
             AddFull(g, acts);
-            var retrobat = Group("RetroBat", g, "Leave the folder empty if this app is in the RetroBat folder.");
+            var retrobat = Group("RetroBat", g);
+            _tips.SetToolTip(_rbPath, "Leave empty if this app is in the RetroBat folder.");
 
             _tips.SetToolTip(_drives, "All of these must be connected, e.g.  G:\\, H:\\");
-            _tips.SetToolTip(_ssid, "Matches when the connected Wi-Fi name contains this text (not case-sensitive).");
+            _tips.SetToolTip(_homeOn, "Matches when the server answers on a wired or Wi-Fi connection.\nNever matches through WireGuard or another VPN.");
+            _tips.SetToolTip(_server, "Your home server's address (IP or name), e.g. 192.168.1.6.");
+            _tips.SetToolTip(_serverMac, "Optional, but recommended: the server's MAC address. Many networks use 192.168.1.x,\n" +
+                                         "so this makes sure a device at the same address elsewhere doesn't count.\n" +
+                                         "Click 'Use current' while you're at home.");
             _tips.SetToolTip(_link, "The folder RetroBat reads (normally 'roms'). It becomes a link to the chosen roms folder.");
             _tips.SetToolTip(_defaultFolder, "On the first run your original roms folder is renamed to this.");
-            foreach (var cb in new[] { _dockFolder, _wifiFolder, _defaultFolder })
+            foreach (var cb in new[] { _dockFolder, _homeFolder, _defaultFolder })
                 _tips.SetToolTip(cb, "A folder name inside the RetroBat folder, or a full path (e.g. a library).");
 
             var panel = new Panel { AutoScroll = true };
@@ -182,8 +189,9 @@ namespace RetroBatFolderSwitcher
 
             _dockOn.Checked = c.DockedRuleEnabled;
             _drives.Text = string.Join(", ", c.DockedDrives ?? new List<string>());
-            _wifiOn.Checked = c.WifiRuleEnabled;
-            _ssid.Text = c.WifiSsidContains;
+            _homeOn.Checked = c.HomeRuleEnabled;
+            _server.Text = c.HomeServer;
+            _serverMac.Text = c.HomeServerMac;
             _libsOnLaunch.Checked = c.BuildLibrariesOnLaunch;
             _mediaOnLaunch.Checked = c.MediaLinksOnLaunch;
             _rbPath.Text = c.RetroBatPath;
@@ -196,7 +204,7 @@ namespace RetroBatFolderSwitcher
 
             RefreshFolderLists();
             _dockFolder.Text = c.DockedFolder;
-            _wifiFolder.Text = c.WifiFolder;
+            _homeFolder.Text = c.HomeFolder;
             _defaultFolder.Text = c.DefaultFolder;
             UpdateEnabled();
             _loading = false;
@@ -216,9 +224,10 @@ namespace RetroBatFolderSwitcher
                 DockedDrives = _drives.Text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
                                            .Select(Switcher.NormalizeDrive).Distinct().ToList(),
                 DockedFolder = Or(_dockFolder.Text, "roms-docked"),
-                WifiRuleEnabled = _wifiOn.Checked,
-                WifiSsidContains = _ssid.Text.Trim(),
-                WifiFolder = Or(_wifiFolder.Text, "roms-local"),
+                HomeRuleEnabled = _homeOn.Checked,
+                HomeServer = _server.Text.Trim(),
+                HomeServerMac = _serverMac.Text.Trim(),
+                HomeFolder = Or(_homeFolder.Text, "roms-local"),
                 DefaultFolder = Or(_defaultFolder.Text, "roms-default"),
                 BuildLibrariesOnLaunch = _libsOnLaunch.Checked,
                 MediaLinksOnLaunch = _mediaOnLaunch.Checked,
@@ -236,7 +245,7 @@ namespace RetroBatFolderSwitcher
             if (!Directory.Exists(rb)) warnings.Add("RetroBat folder not found: " + rb);
             else if (!File.Exists(Path.Combine(rb, c.RetroBatExe))) warnings.Add(c.RetroBatExe + " not found in " + rb);
 
-            var names = new[] { c.WifiFolder, c.DockedFolder, c.DefaultFolder }
+            var names = new[] { c.HomeFolder, c.DockedFolder, c.DefaultFolder }
                 .Concat(c.Libraries.Select(l => l.Output ?? "")).ToList();
             if (names.Any(n => n.IndexOfAny(Path.GetInvalidPathChars()) >= 0 || n.IndexOfAny(new[] { '*', '?', '"', '<', '>', '|' }) >= 0))
                 errors.Add("Folder names can't contain * ? \" < > |");
@@ -317,20 +326,45 @@ namespace RetroBatFolderSwitcher
             _tips.SetToolTip(_now, string.Join("\n", lines));
         }
 
-        private void UseCurrentWifi()
+        /// <summary>Runs the local-network check and writes the details to Activity.</summary>
+        private LocalCheckResult HomeCheck(bool requireMac)
         {
-            var ssids = Wifi.GetConnectedSsids();
-            if (ssids.Count == 0)
+            string server = _server.Text.Trim();
+            if (server.Length == 0) { Out("Enter the server address first."); return null; }
+            _status.Text = "Looking for " + server + " on the local network...";
+            Cursor = Cursors.WaitCursor;
+            LocalCheckResult r;
+            try { r = LocalNetwork.Check(server, requireMac ? _serverMac.Text : null); }
+            finally { Cursor = Cursors.Default; }
+            foreach (var d in r.Details) Out("Home network: " + d);
+            if (r.Warning != null) Out("WARNING: " + r.Warning);
+            _status.Text = r.Summary + ".";
+            return r;
+        }
+
+        private void CheckHome()
+        {
+            var r = HomeCheck(requireMac: true);
+            if (r == null) return;
+            Out(r.Local ? "Home network: yes - " + r.Summary + "." : "Home network: no - " + r.Summary + " (away, or only reachable through the VPN).");
+            RefreshNow();
+        }
+
+        private void UseCurrentMac()
+        {
+            var r = HomeCheck(requireMac: false);
+            if (r == null) return;
+            if (!r.Local)
             {
                 MessageBox.Show(this,
-                    "No Wi-Fi name detected.\n\nIf you are on Wi-Fi, Windows may be hiding the name: turn on Location " +
-                    "services and 'Let desktop apps access your location' (Settings > Privacy & security > Location).",
+                    "The server didn't answer on a wired or Wi-Fi connection, so its hardware address can't be read.\n\n" +
+                    "Do this while you're at home, on the same network as the server.",
                     Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            _ssid.Text = ssids[0];
-            _wifiOn.Checked = true;
-            Out("Connected Wi-Fi: " + string.Join(", ", ssids));
+            _serverMac.Text = r.Mac;
+            _homeOn.Checked = true;
+            Out("Saved hardware address " + r.Mac + " for " + r.Server + " (press Save).");
             RefreshNow();
         }
 
@@ -427,7 +461,7 @@ namespace RetroBatFolderSwitcher
 
             bool was = _loading;
             _loading = true;
-            foreach (var cb in new[] { _dockFolder, _wifiFolder, _defaultFolder })
+            foreach (var cb in new[] { _dockFolder, _homeFolder, _defaultFolder })
             {
                 string keep = cb.Text;
                 cb.Items.Clear();
@@ -440,7 +474,7 @@ namespace RetroBatFolderSwitcher
         private void UpdateEnabled()
         {
             _drives.Enabled = _dockFolder.Enabled = _dockOn.Checked;
-            _ssid.Enabled = _wifiFolder.Enabled = _wifiOn.Checked;
+            _server.Enabled = _serverMac.Enabled = _homeFolder.Enabled = _homeOn.Checked;
         }
 
         private void OnClosingAsk(object sender, FormClosingEventArgs e)

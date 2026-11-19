@@ -16,6 +16,7 @@ namespace RetroBatFolderSwitcher
         private readonly ListView _romView = JobView(media: false);
         private readonly ListView _mediaView = JobView(media: true);
         private readonly TextBox _roboOpts = new TextBox();
+        private readonly CheckBox _syncLocalOnly = new CheckBox { Text = "Only run when the home server is on the local network (never over WireGuard)", AutoSize = true, Margin = new Padding(3, 6, 3, 3) };
 
         private Control BuildSyncTab()
         {
@@ -26,7 +27,10 @@ namespace RetroBatFolderSwitcher
             var mediaBox = FillGroup("Media sync   -   robocopy IN OUT /MIR /XD <excluded folders>", JobPanel(true));
 
             var opts = Grid();
+            AddFull(opts, _syncLocalOnly);
             AddRow(opts, Lbl("Extra robocopy options"), _roboOpts);
+            _tips.SetToolTip(_syncLocalOnly, "Uses the server address (and MAC) from the Home network rule on the Launch tab.\n" +
+                                             "Jobs are skipped when the server can only be reached through the VPN.");
 
             _romView.DoubleClick += (s, e) => EditSelected(false);
             _mediaView.DoubleClick += (s, e) => EditSelected(true);
@@ -79,6 +83,7 @@ namespace RetroBatFolderSwitcher
             _romJobs = (c.RomSyncs ?? new List<SyncJob>()).Select(j => j.Clone()).ToList();
             _mediaJobs = (c.MediaSyncs ?? new List<SyncJob>()).Select(j => j.Clone()).ToList();
             _roboOpts.Text = c.RobocopyOptions ?? "";
+            _syncLocalOnly.Checked = c.SyncOnlyOnHomeNetwork;
             RefreshJobs(false, -1);
             RefreshJobs(true, -1);
         }
@@ -88,6 +93,7 @@ namespace RetroBatFolderSwitcher
             c.RomSyncs = _romJobs.Select(j => j.Clone()).ToList();
             c.MediaSyncs = _mediaJobs.Select(j => j.Clone()).ToList();
             c.RobocopyOptions = _roboOpts.Text.Trim();
+            c.SyncOnlyOnHomeNetwork = _syncLocalOnly.Checked;
         }
 
         private List<SyncJob> Jobs(bool media) => media ? _mediaJobs : _romJobs;
@@ -247,11 +253,36 @@ namespace RetroBatFolderSwitcher
                         MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             }
 
+            string routeWarning = null;
+            if (_syncLocalOnly.Checked)
+            {
+                if (string.IsNullOrWhiteSpace(_server.Text))
+                {
+                    MessageBox.Show(this, "Set the home server address on the Launch tab (Home network), or turn off " +
+                                          "'Only run when the home server is on the local network'.", Text,
+                                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                var home = HomeCheck(requireMac: true);
+                if (home == null) return;
+                if (!home.Local)
+                {
+                    Out("Sync skipped - " + home.Summary + ".");
+                    MessageBox.Show(this, "Sync skipped: " + home.Summary + ".\n\n" +
+                                          "You're away from home, or the server is only reachable through WireGuard.",
+                                    Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    _status.Text = "Sync skipped - server not on the local network.";
+                    return;
+                }
+                routeWarning = home.Warning;
+            }
+
             if (!preview)
             {
                 var sb = new StringBuilder("Mirror these folders?\n\n");
                 foreach (var r in runs) sb.Append("robocopy ").Append(r.Item2).Append("\n\n");
                 sb.Append("Files in the output folder that aren't in the input will be DELETED (excluded folders are kept).");
+                if (routeWarning != null) sb.Append("\n\nWARNING: ").Append(routeWarning);
                 if (MessageBox.Show(this, sb.ToString(), Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
             }
 
